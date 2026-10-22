@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Claude Limits
+Comment=Zeigt 5-Stunden- und Wochen-Limit im Tray
+Exec=@EXEC@
+Icon=utilities-system-monitor
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=5
