@@ -39,10 +39,11 @@ Kein Browser, kein Kontextwechsel.
 
 | Datei | Zeilen | Zweck |
 |---|---:|---|
-| `~/claude-limits-tray/claude_limits_tray.py` | 949 | Gesamte App: Abruf, Tray-Item, Menü, Fenster |
-| `~/claude-limits-tray/README.md` | 51 | Installation, Bedienung, Datenquelle, Fehlerfälle |
-| `~/claude-limits-tray/install.sh` | 15 | Symlink und Autostart einrichten |
-| `~/claude-limits-tray/claude-limits-tray.desktop` | 10 | Autostart-Vorlage (wird von `install.sh` befüllt) |
+| `~/claude-limits-tray/claude_limits_tray.py` | 1057 | Gesamte App: Abruf, Tray-Item, Menü, Fenster |
+| `~/claude-limits-tray/tests/test_core.py` | 188 | Unit-Tests für Abruf, Token-Auswahl, Backoff, Icon |
+| `~/claude-limits-tray/README.md` | — | Installation, Bedienung, Datenquelle, Fehlerfälle |
+| `~/claude-limits-tray/install.sh` / `uninstall.sh` | — | Symlink und Autostart einrichten bzw. entfernen |
+| `~/claude-limits-tray/claude-limits-tray.desktop` | — | Autostart-Vorlage (wird von `install.sh` befüllt) |
 | `~/.local/bin/claude-limits-tray` | — | Symlink auf das Skript (installiert) |
 | `~/.config/autostart/claude-limits-tray.desktop` | — | Autostart-Eintrag (installiert) |
 | `~/.cache/claude-limits-tray/usage.json` | — | Laufzeit-Cache der letzten Werte |
@@ -55,7 +56,7 @@ Kein Browser, kein Kontextwechsel.
   ein AppIndicator-Paket ist nicht nötig
 - Datenquelle: `GET https://api.anthropic.com/api/oauth/usage` — derselbe Endpoint,
   den `/usage` in Claude Code nutzt; OAuth-Token aus `~/.claude/.credentials.json`
-  oder `CLAUDE_CODE_OAUTH_TOKEN`
+  (`claudeAiOauth`) oder `CLAUDE_CODE_OAUTH_TOKEN`; andere Tokens werden nie gesendet
 - Der Token bleibt im Speicher und wird weder geloggt noch angezeigt
 - Abruf läuft in einem Hintergrund-Thread, die Oberfläche bleibt bedienbar
 - Fenster ist rahmenlos, abgerundet, öffnet neben dem Mauszeiger innerhalb der
@@ -63,10 +64,12 @@ Kein Browser, kein Kontextwechsel.
 
 ## Status
 
-Live verifiziert am 23.10.2026: Anzeige 18 % (5 h) und 31 % (Woche), Tooltip,
-Links-/Mittel-/Rechtsklick, Menüaktionen, Schließen bei Klick daneben, Autostart-Datei.
-Ein während der Entwicklung selbst ausgelöster HTTP-429-Fall wurde zur Prüfung der
-Fehleranzeige genutzt und ist sauber abgefangen.
+Prototyp am 23.10.2026 überarbeitet und als lokales Git-Repository angelegt.
+Behoben: falsche Token-Wahl (MCP-Token konnte gesendet werden), falsche
+Prozent-Umrechnung bei Werten ≤ 1, fehlende Neuanmeldung nach Panel-Neustart,
+Dauer-Anfragen bei `HTTP 429` mit `Retry-After: 0` (jetzt exponentielles Backoff),
+veraltete Werte im Symbol nicht erkennbar. 19 Unit-Tests; live geprüft:
+Registrierung im Panel, Tooltip, Menü, Einzelinstanz, Fehleranzeige.
 
 ## Nächste Schritte (optional)
 
