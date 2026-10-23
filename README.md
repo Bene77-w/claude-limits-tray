@@ -4,10 +4,14 @@ Tray-Symbol für Cinnamon/X11 mit den Nutzungslimits des Claude-Abos und aller
 Codex-Profile (ChatGPT-Abos). Linksklick öffnet ein Fenster mit allen Abos.
 
 - Symbol: zeigt das Abo, das **gerade benutzt** wird (Buchstabe im Ring:
-  `C` = Claude, `A`/`B` = Codex-Profil). Ring = höchster Verbrauch dieses Abos
-  (grün → gelb → orange → rot); blass = Werte veraltet, gepunktet = noch keine Daten
+  `A` = Anthropic/Claude, `C` = Codex; welches Codex-Profil, steht im Tooltip).
+  Ring = 5-Stunden-Limit, falls das Abo eins hat, sonst das nächstlängere
+  (Woche, bei Codex Free 30 Tage); blass = Werte veraltet, gepunktet = noch keine Daten
+- Farben: grün, ab 70 % orange, ab 90 % rot. Im Tray zählt das höchste Limit des
+  angezeigten Abos (ein Wochenlimit bei 92 % färbt den Ring also rot), im Fenster
+  jeder Balken für sich
 - Auswahl: „in Benutzung“ = Aktivität in den letzten 10 min. Mehrere gleichzeitig →
-  das mit dem höchsten Verbrauch. Keins aktiv → das zuletzt genutzte
+  das mit dem höchsten Wert im Ring-Limit. Keins aktiv → das zuletzt genutzte
 - Tooltip: alle Abos mit Limits und Reset-Countdown, das angezeigte mit ▸ markiert
 - Fenster: je Abo Plan, Status („im Tray“, „aktiv“, „genutzt vor …“), Balken je Limit,
   Prozentwert, Reset-Countdown und Reset-Uhrzeit

@@ -9,9 +9,10 @@ unterbricht den Arbeitsfluss und passiert meist erst dann, wenn ein Limit schon 
 ## Lösung
 
 Ein Tray-Symbol in der Cinnamon-Leiste, das den Verbrauch permanent sichtbar macht:
-Das Symbol zeigt das gerade benutzte Abo (Buchstabe C = Claude, A/B = Codex-Profil),
-bei mehreren gleichzeitig das am stärksten ausgelastete; der Ring zeigt dessen höchsten
-Wert. Ein Linksklick öffnet ein kleines Fenster mit allen Abos: Plan, Limits, Prozent,
+Das Symbol zeigt das gerade benutzte Abo (Buchstabe A = Anthropic/Claude, C = Codex),
+bei mehreren gleichzeitig das am stärksten ausgelastete; der Ring zeigt dessen
+5-Stunden-Limit (sonst das nächstlängere) und färbt sich orange ab 70 % bzw. rot ab 90 %,
+sobald irgendein Limit dieses Abos die Schwelle erreicht. Ein Linksklick öffnet ein kleines Fenster mit allen Abos: Plan, Limits, Prozent,
 Reset-Countdown und Reset-Uhrzeit. Kein Browser, kein Kontextwechsel.
 
 ## Funktionsumfang (Scope)
@@ -19,10 +20,12 @@ Reset-Countdown und Reset-Uhrzeit. Kein Browser, kein Kontextwechsel.
 **Enthalten**
 
 - Abos: Claude (Claude-Code-Login) und jedes Codex-Profil (`~/.codex` = A, `~/.codex-b` = B)
-- Tray-Symbol als StatusNotifierItem mit Ringdiagramm (grün → gelb → orange → rot) und Buchstabe
-- Auswahl: Aktivität in den letzten 10 min; mehrere aktiv → höchster Verbrauch; keins → zuletzt genutzt
+- Tray-Symbol als StatusNotifierItem mit Ringdiagramm (5-h-Limit, sonst nächstlängeres) und
+  Buchstabe; grün, orange ab 70 %, rot ab 90 % (höchstes Limit des Abos)
+- Auswahl: Aktivität in den letzten 10 min; mehrere aktiv → höchster Wert im Ring-Limit;
+  keins → zuletzt genutzt
 - Tooltip ohne Klick: alle Abos mit Limits und Reset-Countdown, angezeigtes mit ▸
-- Popup-Fenster: je Abo Plan, Status („im Tray“, „aktiv“, „genutzt vor …“), Balken je Limit,
+- Popup-Fenster (Balkenfarbe je Limit nach denselben Schwellen): je Abo Plan, Status („im Tray“, „aktiv“, „genutzt vor …“), Balken je Limit,
   Prozent, „Zurückgesetzt in …" plus Datum/Uhrzeit
 - Linksklick öffnet, Mittelklick aktualisiert, Rechtsklick zeigt Menü
 - Menü: Fenster öffnen, Aktualisieren, Beenden
@@ -45,9 +48,9 @@ Reset-Countdown und Reset-Uhrzeit. Kein Browser, kein Kontextwechsel.
 
 | Datei | Zeilen | Zweck |
 |---|---:|---|
-| `~/claude-limits-tray/claude_limits_tray.py` | 904 | Tray-Item, Menü, Fenster |
-| `~/claude-limits-tray/providers.py` | 692 | Claude/Codex-Abruf, Aktivitätserkennung, Auswahl, Cache |
-| `~/claude-limits-tray/tests/` | 478 | Unit-Tests (Abruf, Token-Auswahl, Backoff, Auswahl, Icon) |
+| `~/claude-limits-tray/claude_limits_tray.py` | 907 | Tray-Item, Menü, Fenster |
+| `~/claude-limits-tray/providers.py` | 704 | Claude/Codex-Abruf, Aktivitätserkennung, Auswahl, Cache |
+| `~/claude-limits-tray/tests/` | 511 | Unit-Tests (Abruf, Token-Auswahl, Backoff, Auswahl, Icon) |
 | `~/claude-limits-tray/README.md` | — | Installation, Bedienung, Datenquelle, Fehlerfälle |
 | `~/claude-limits-tray/install.sh` / `uninstall.sh` | — | Symlink und Autostart einrichten bzw. entfernen |
 | `~/claude-limits-tray/claude-limits-tray.desktop` | — | Autostart-Vorlage (wird von `install.sh` befüllt) |
@@ -81,7 +84,7 @@ Reset-Countdown und Reset-Uhrzeit. Kein Browser, kein Kontextwechsel.
 Panel-Neustart, Fokus) und um Codex-Abos erweitert (Branch `feature/codex-abos`,
 Review-Anker `c492ca5`). Das Symbol zeigt das gerade benutzte Abo; bei mehreren
 das mit dem höchsten Verbrauch. Review (Konformität + Logik) mit Befunden
-behoben. 39 Unit-Tests; live geprüft mit echten Daten
+behoben. 42 Unit-Tests; live geprüft mit echten Daten
 (Claude Pro, Codex A Free, Codex B Plus) und End-to-End mit simuliertem
 Codex-Profil auf eigenem D-Bus.
 

@@ -315,6 +315,20 @@ def _account(name, percent=None, activity=None):
     return account
 
 
+class DisplayLimitTest(unittest.TestCase):
+    def test_five_hour_preferred_else_next(self):
+        claude = p.Account("claude", "Claude", "A")
+        claude.limits = [p.Limit("seven_day", "Wochen-Limit", 92, None), p.Limit("five_hour", "5-Stunden-Limit", 20, None)]
+        self.assertEqual((claude.display_percent(), claude.max_percent()), (20, 92))
+        codex = p.Account("codex:.codex-b", "Codex B", "C")
+        codex.limits = [p.Limit("primary", "5-Stunden-Limit", 3, None), p.Limit("secondary", "Wochen-Limit", 50, None)]
+        self.assertEqual(codex.display_percent(), 3)
+        free = p.Account("codex:.codex", "Codex A", "C")
+        free.limits = [p.Limit("primary", "30-Tage-Limit", 1, None)]
+        self.assertEqual(free.display_percent(), 1)
+        self.assertIsNone(p.Account("x", "x", "x").display_percent())
+
+
 class ChooseAccountTest(unittest.TestCase):
     def test_active_highest_usage_wins(self):
         now = 10_000.0
@@ -322,6 +336,14 @@ class ChooseAccountTest(unittest.TestCase):
         codex_a = _account("a", 80, now - 7200)  # nicht aktiv
         codex_b = _account("b", 55, now - 30)
         self.assertIs(p.choose_account([claude, codex_a, codex_b], now), codex_b)
+
+    def test_compares_ring_limit_not_week(self):
+        now = 10_000.0
+        claude = _account("claude", None, now - 10)
+        claude.limits = [p.Limit("five_hour", "5-Stunden-Limit", 10, None), p.Limit("seven_day", "Wochen-Limit", 95, None)]
+        codex = _account("b", None, now - 10)
+        codex.limits = [p.Limit("primary", "5-Stunden-Limit", 40, None), p.Limit("secondary", "Wochen-Limit", 5, None)]
+        self.assertIs(p.choose_account([claude, codex], now), codex)
 
     def test_single_active(self):
         now = 10_000.0
@@ -403,8 +425,8 @@ class DiscoverAndCacheTest(TempDirTest):
             (self.dir / name).mkdir()
             if auth:
                 (self.dir / name / "auth.json").write_text("{}")
-        names = [a.name for a in p.discover_accounts(self.dir)]
-        self.assertEqual(names, ["Claude", "Codex A", "Codex B"])
+        found = [(a.name, a.short) for a in p.discover_accounts(self.dir)]
+        self.assertEqual(found, [("Claude", "A"), ("Codex A", "C"), ("Codex B", "C")])
 
     def test_cache_roundtrip_and_legacy(self):
         path = self.dir / "usage.json"

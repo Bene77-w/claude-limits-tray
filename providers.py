@@ -280,7 +280,19 @@ class Account:
         return f"{self.name} · {self.plan.capitalize()}" if self.plan else self.name
 
     def max_percent(self) -> float | None:
+        """Höchster Verbrauch über alle Limits - bestimmt die Warnfarbe im Tray."""
         return max((limit.percent for limit in self.limits), default=None)
+
+    def display_limit(self) -> Limit | None:
+        """Limit für den Ring: das 5-Stunden-Limit, sonst das nächstlängere."""
+        for limit in self.limits:
+            if limit.key == "five_hour" or limit.label == "5-Stunden-Limit":
+                return limit
+        return self.limits[0] if self.limits else None
+
+    def display_percent(self) -> float | None:
+        limit = self.display_limit()
+        return limit.percent if limit else None
 
     def is_stale(self) -> bool:
         return bool(self.error and self.limits)
@@ -384,7 +396,7 @@ _MODEL_RE = re.compile(rb'"model":\s*"([^"]+)"')
 
 class ClaudeAccount(Account):
     def __init__(self, projects: Path = CLAUDE_PROJECTS, credentials: Path = CLAUDE_CREDENTIALS):
-        super().__init__("claude", "Claude", "C")
+        super().__init__("claude", "Claude", "A")  # A = Anthropic
         self.projects = projects
         self.credentials = credentials
         self._model_cache: dict[Path, tuple[float, str | None]] = {}
@@ -521,12 +533,12 @@ def parse_codex_rollout(line: bytes):
 
 
 class CodexAccount(Account):
-    def __init__(self, home: Path, short: str):
-        super().__init__(f"codex:{home.name}", f"Codex {short}", short)
+    def __init__(self, home: Path, profile: str):
+        super().__init__(f"codex:{home.name}", f"Codex {profile}", "C")  # C = Codex, Profil im Namen
         self.home = home
         self.expired_msg = (
             f"Token abgelaufen. Codex in diesem Profil einmal starten "
-            f"(codex-{short.lower()}); die Anzeige aktualisiert sich danach von selbst."
+            f"(codex-{profile.lower()}); die Anzeige aktualisiert sich danach von selbst."
         )
         self._newest: tuple[float, Path] | None = None
         self._live_seen: tuple[float, Path] | None = None
@@ -575,15 +587,15 @@ def discover_accounts(home: Path = HOME) -> list[Account]:
     used = set()
     for path in sorted(home.glob(".codex*")):
         if path.name == ".codex":
-            short = "A"
+            profile = "A"
         elif path.name.startswith(".codex-") and len(path.name) == 8 and path.name[-1].isalpha():
-            short = path.name[-1].upper()  # ~/.codex-b = B; Backups wie .codex-old zählen nicht
+            profile = path.name[-1].upper()  # ~/.codex-b = B; Backups wie .codex-old zählen nicht
         else:
             continue
-        if short in used or not (path.is_dir() and (path / "auth.json").is_file()):
+        if profile in used or not (path.is_dir() and (path / "auth.json").is_file()):
             continue
-        used.add(short)
-        accounts.append(CodexAccount(path, short))
+        used.add(profile)
+        accounts.append(CodexAccount(path, profile))
     return accounts
 
 
@@ -591,13 +603,13 @@ def choose_account(accounts: list[Account], now: float) -> Account | None:
     """Welches Abo das Tray-Symbol zeigt.
 
     In Benutzung (Aktivität in den letzten ACTIVE_SECONDS) hat Vorrang; bei
-    mehreren gleichzeitig das mit dem höchsten Verbrauch. Ist keins aktiv,
-    das zuletzt genutzte.
+    mehreren gleichzeitig das mit dem höchsten Verbrauch im Ring-Limit
+    (5 Stunden, sonst das nächstlängere). Ist keins aktiv, das zuletzt genutzte.
     """
     with_data = [a for a in accounts if a.limits]
     active = [a for a in with_data if a.is_active(now)]
     if active:
-        return max(active, key=lambda a: a.max_percent() or 0.0)
+        return max(active, key=lambda a: a.display_percent() or 0.0)
     used = [a for a in with_data if a.activity is not None]
     if used:
         return max(used, key=lambda a: a.activity)
@@ -686,7 +698,7 @@ class DemoAccount(Account):
 
 def demo_accounts() -> list[Account]:
     return [
-        DemoAccount("claude", "Claude", "C", "pro", [34, 61], 120),
-        DemoAccount("codex:.codex", "Codex A", "A", "free", [12], None),
-        DemoAccount("codex:.codex-b", "Codex B", "B", "plus", [72, 40], 30),
+        DemoAccount("claude", "Claude", "A", "pro", [34, 93], 120),
+        DemoAccount("codex:.codex", "Codex A", "C", "free", [12], None),
+        DemoAccount("codex:.codex-b", "Codex B", "C", "plus", [72, 40], 30),
     ]

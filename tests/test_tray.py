@@ -12,8 +12,8 @@ import providers as p  # noqa: E402
 
 class PresentationTest(unittest.TestCase):
     def test_levels_and_duration(self):
-        self.assertEqual([clt._level(x) for x in (0, 49.9, 50, 80, 100, 130)],
-                         ["ok", "ok", "warn", "hot", "crit", "crit"])
+        self.assertEqual([clt._level(x) for x in (0, 69.9, 70, 89.9, 90, 130)],
+                         ["ok", "ok", "hot", "hot", "crit", "crit"])
         self.assertEqual([clt._duration(s) for s in (5, 125, 7300, 90000)], ["5 s", "2 Min", "2 Std", "1 T"])
 
     def test_icon_states_differ(self):
@@ -26,6 +26,17 @@ class PresentationTest(unittest.TestCase):
         self.assertGreater(alpha_max(clt.render_icon(40, 32)), alpha_max(clt.render_icon(40, 32, stale=True)))
         self.assertNotEqual(clt.render_icon(40, 22, letter="A").tobytes(),
                             clt.render_icon(40, 22, letter="B").tobytes())
+
+    def test_ring_color_follows_highest_limit(self):
+        def has_color(img, rgb):
+            return any(px[:3] == rgb and px[3] == 255 for px in img.getdata())
+
+        plain = clt.render_icon(20, 32)
+        warned = clt.render_icon(20, 32, level_percent=92)  # 5 h bei 20 %, Woche bei 92 %
+        self.assertTrue(has_color(plain, clt.LEVEL_RGB["ok"]))
+        self.assertTrue(has_color(warned, clt.LEVEL_RGB["crit"]))
+        self.assertFalse(has_color(warned, clt.LEVEL_RGB["ok"]))
+        self.assertTrue(has_color(clt.render_icon(75, 32), clt.LEVEL_RGB["hot"]))
 
     def test_pixmaps_format(self):
         for size, _h, data in clt.icon_pixmaps(75, letter="C"):

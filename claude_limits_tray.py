@@ -58,9 +58,8 @@ FONT_PATHS = [
 # Farbstufen: Ring im Tray und Balken im Fenster nutzen dieselben Werte
 LEVEL_RGB = {
     "ok": (86, 182, 110),
-    "warn": (240, 190, 60),
-    "hot": (240, 133, 45),
-    "crit": (229, 72, 77),
+    "hot": (240, 133, 45),   # ab 70 %
+    "crit": (229, 72, 77),   # ab 90 %
 }
 
 
@@ -68,12 +67,10 @@ LEVEL_RGB = {
 
 
 def _level(percent: float) -> str:
-    if percent >= 100:
+    if percent >= 90:
         return "crit"
-    if percent >= 80:
+    if percent >= 70:
         return "hot"
-    if percent >= 50:
-        return "warn"
     return "ok"
 
 
@@ -126,10 +123,13 @@ def _font(px: int):
 
 
 def render_icon(
-    percent: float | None, size: int = 32, stale: bool = False, letter: str = ""
+    percent: float | None, size: int = 32, stale: bool = False, letter: str = "",
+    level_percent: float | None = None,
 ) -> Image.Image:
-    """Ringdiagramm: gefüllter Teil = verbrauchtes Limit, Buchstabe = Abo.
+    """Ringdiagramm: gefüllter Teil = `percent`, Buchstabe = Abo.
 
+    Die Farbe folgt `level_percent` (Standard: `percent`), damit z. B. ein
+    fast ausgeschöpftes Wochenlimit den Ring des 5-Stunden-Limits einfärbt.
     Ohne Daten erscheint ein gepunkteter Ring, bei veralteten Werten (Fehler)
     ein blasser Ring - beides soll nicht wie ein gültiger Wert aussehen.
     """
@@ -143,7 +143,7 @@ def render_icon(
             draw.arc(box, start, start + 14, fill=(150, 150, 150, 220), width=width)
         return img
     alpha = 120 if stale else 255
-    color = LEVEL_RGB[_level(percent)]
+    color = LEVEL_RGB[_level(percent if level_percent is None else max(percent, level_percent))]
     draw.arc(box, 0, 360, fill=(130, 130, 130, 110), width=width)
     sweep = min(percent, 100.0) / 100.0 * 360.0
     if sweep > 0.5:
@@ -157,11 +157,13 @@ def render_icon(
     return img
 
 
-def icon_pixmaps(percent: float | None, stale: bool = False, letter: str = ""):
+def icon_pixmaps(
+    percent: float | None, stale: bool = False, letter: str = "", level_percent: float | None = None
+):
     """ARGB32-Pixmaps im SNI-Format (a(iiay))."""
     out = []
     for size in (22, 32, 48, 64):
-        r, g, b, a = render_icon(percent, size, stale, letter).split()
+        r, g, b, a = render_icon(percent, size, stale, letter, level_percent).split()
         argb = Image.merge("RGBA", (a, r, g, b)).tobytes()  # A,R,G,B
         out.append(dbus.Struct((size, size, dbus.ByteArray(argb)), signature="iiay"))
     return dbus.Array(out, signature="(iiay)")
@@ -208,9 +210,10 @@ class StatusNotifierItem(dbus.service.Object):
     def _props(self) -> dict:
         shown = self.app.shown
         pixmaps = icon_pixmaps(
-            shown.max_percent() if shown else None,
+            shown.display_percent() if shown else None,
             stale=bool(shown and shown.is_stale()),
             letter=shown.short if shown else "",
+            level_percent=shown.max_percent() if shown else None,
         )
         title, text = self.app.tooltip_lines()
         tooltip = dbus.Struct(
