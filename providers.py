@@ -7,6 +7,7 @@ Tokens werden nur im Speicher gehalten und nie ausgegeben.
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import os
 import re
@@ -134,12 +135,27 @@ def short_label(label: str) -> str:
     )
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Weiterleitungen nicht folgen: urllib gäbe den Authorization-Header
+    sonst auch an einen fremden Host weiter. Ein 3xx endet als HTTPError."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def _urlopen(req, timeout):
+    return _OPENER.open(req, timeout=timeout)
+
+
 def _get_json(url: str, headers: dict, timeout: float, expired_msg: str, forbidden_msg: str):
     req = urllib.request.Request(
         url, headers={**headers, "User-Agent": USER_AGENT, "Accept": "application/json"}
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _urlopen(req, timeout) as resp:
             body = resp.read()
     except urllib.error.HTTPError as exc:
         if exc.code == 401:
@@ -155,7 +171,7 @@ def _get_json(url: str, headers: dict, timeout: float, expired_msg: str, forbidd
         raise RuntimeError(f"Serverfehler (HTTP {exc.code})") from exc
     except urllib.error.URLError as exc:
         raise NetworkError(f"Keine Verbindung: {exc.reason}") from exc
-    except OSError as exc:  # Timeout beim Lesen u. Ä.
+    except (OSError, http.client.HTTPException) as exc:  # Timeout, abgebrochene Antwort u. Ä.
         raise NetworkError(f"Keine Verbindung: {type(exc).__name__}") from exc
     try:
         return json.loads(body.decode("utf-8"))
@@ -180,6 +196,27 @@ def _tail(path: Path, size: int = TAIL_BYTES) -> bytes:
         fh.seek(0, os.SEEK_END)
         fh.seek(max(0, fh.tell() - size))
         return fh.read()
+
+
+def _last_match(path: Path, regex: re.Pattern, skip=(), limit: int = 16 * TAIL_BYTES):
+    """Letzter Treffer von `regex` in der Datei, rückwärts in Blöcken gelesen.
+
+    Große Tool-Ausgaben am Sitzungsende verdrängen die letzte Modellzeile oft
+    aus einem einzelnen Block; darum bis `limit` Bytes weiterlesen.
+    """
+    with open(path, "rb") as fh:
+        end = fh.seek(0, os.SEEK_END)
+        start = end
+        while start > 0 and end - start < limit:
+            start = max(0, start - TAIL_BYTES)
+            fh.seek(start)
+            # Überlappung, damit ein Treffer an der Blockgrenze nicht verloren geht
+            data = fh.read(min(end, start + TAIL_BYTES + 512) - start)
+            hits = [m for m in regex.findall(data) if m not in skip]
+            if hits:
+                return hits[-1]
+            end = start
+    return None
 
 
 def _newest(paths) -> tuple[float, Path] | None:
@@ -271,7 +308,12 @@ class Account:
         ts, limits, plan = live
         if now - ts > ACTIVE_SECONDS or (self.last_update is not None and ts <= self.last_update):
             return False
-        self.apply_success(limits, ts, plan)
+        # Nur die Werte übernehmen: eine 429-Pause oder ein Auth-Fehler gilt
+        # weiter für den Abruf, die Anzeige ist aber nicht mehr veraltet.
+        self.limits = limits
+        self.plan = plan or self.plan
+        self.last_update = ts
+        self.error = None
         return True
 
     def apply_error(self, exc: Exception, now: float):
@@ -288,7 +330,7 @@ class Account:
             return True  # Client hat den Token vermutlich erneuert
         if now < self.retry_after:
             return False
-        if self.error:
+        if self.error or self.retry_after:
             return True  # Wartezeit nach dem Fehler ist abgelaufen
         return self.last_update is None or now - self.last_update >= interval
 
@@ -367,18 +409,20 @@ class ClaudeAccount(Account):
         if cached and cached[0] == mtime:
             return cached[1]
         try:
-            models = [m.decode() for m in _MODEL_RE.findall(_tail(path)) if m != b"<synthetic>"]
+            found = _last_match(path, _MODEL_RE, skip=(b"<synthetic>",))
         except OSError:
-            models = []
-        model = models[-1] if models else None
+            found = None
+        model = found.decode(errors="replace") if found else None
         self._model_cache[path] = (mtime, model)
         return model
 
-    def scan_activity(self, check: int = 6):
+    def scan_activity(self, check: int = 50):
         """Letzte Claude-Code-Nutzung mit Claude-Modell.
 
         Sitzungen mit anderen Modellen (z. B. claude-dsh mit DeepSeek) zählen
-        nicht, obwohl sie im selben Ordner liegen.
+        nicht, obwohl sie im selben Ordner liegen. Geprüft werden die neuesten
+        `check` Sitzungen; das Ergebnis je Datei wird bis zur nächsten
+        Änderung zwischengespeichert.
         """
         files = []
         for path in self.projects.glob("*/*.jsonl"):
@@ -528,12 +572,18 @@ class CodexAccount(Account):
 def discover_accounts(home: Path = HOME) -> list[Account]:
     """Claude plus jedes Codex-Profil (~/.codex = A, ~/.codex-b = B, ...)."""
     accounts: list[Account] = [ClaudeAccount()]
+    used = set()
     for path in sorted(home.glob(".codex*")):
-        suffix = path.name[len(".codex"):].lstrip("-")
-        if path.name != ".codex" and not suffix.isalnum():
+        if path.name == ".codex":
+            short = "A"
+        elif path.name.startswith(".codex-") and len(path.name) == 8 and path.name[-1].isalpha():
+            short = path.name[-1].upper()  # ~/.codex-b = B; Backups wie .codex-old zählen nicht
+        else:
             continue
-        if path.is_dir() and (path / "auth.json").is_file():
-            accounts.append(CodexAccount(path, suffix.upper() or "A"))
+        if short in used or not (path.is_dir() and (path / "auth.json").is_file()):
+            continue
+        used.add(short)
+        accounts.append(CodexAccount(path, short))
     return accounts
 
 

@@ -8,7 +8,7 @@ Codex-Profile (ChatGPT-Abos). Linksklick öffnet ein Fenster mit allen Abos.
   (grün → gelb → orange → rot); blass = Werte veraltet, gepunktet = noch keine Daten
 - Auswahl: „in Benutzung“ = Aktivität in den letzten 10 min. Mehrere gleichzeitig →
   das mit dem höchsten Verbrauch. Keins aktiv → das zuletzt genutzte
-- Tooltip: alle Abos, das angezeigte mit ▸ markiert
+- Tooltip: alle Abos mit Limits und Reset-Countdown, das angezeigte mit ▸ markiert
 - Fenster: je Abo Plan, Status („im Tray“, „aktiv“, „genutzt vor …“), Balken je Limit,
   Prozentwert, Reset-Countdown und Reset-Uhrzeit
 - Aktualisierung: alle 60 s bei offenem Fenster, sonst alle 5 min je Abo; Codex
@@ -42,14 +42,16 @@ MCP-Servern) werden nie verwendet. Aktivität: zuletzt geschriebene Sitzungen un
 `~/.claude/projects/`, aber nur mit Claude-Modell – `claude-dsh`-Sitzungen mit
 DeepSeek zählen nicht.
 
-**Codex:** jedes Profil `~/.codex` (= A) und `~/.codex-<x>` (= X) mit `auth.json`.
+**Codex:** jedes Profil `~/.codex` (= A) und `~/.codex-<buchstabe>` (z. B. `~/.codex-b` = B)
+mit `auth.json`; andere Ordner wie `~/.codex-old` werden ignoriert.
 `GET https://chatgpt.com/backend-api/wham/usage` (wie `/status` in Codex) mit
 `access_token` und `account_id` des Profils; der Token geht nur an chatgpt.com.
 Aktivität und Live-Werte: neueste `sessions/**/rollout-*.jsonl` des Profils
 (`token_count`-Einträge mit `rate_limits`). Abgelaufene Tokens erneuert die App
 nicht selbst – Codex im Profil einmal starten (`codex-a`/`codex-b`).
 
-Tokens werden nur im Speicher gehalten und nie geloggt oder angezeigt.
+Tokens werden nur im Speicher gehalten und nie geloggt oder angezeigt. Weiterleitungen
+werden nicht verfolgt, damit kein Token an einen anderen Host geht.
 `utilization`/`used_percent` sind Prozentwerte.
 
 ## Fehlerfälle

@@ -2,6 +2,7 @@
 
 import sys
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -36,6 +37,9 @@ class PresentationTest(unittest.TestCase):
         account.plan = "plus"
         account.limits = [p.Limit("primary", "5-Stunden-Limit", 72, None), p.Limit("secondary", "Wochen-Limit", 40, None)]
         self.assertEqual(clt.account_summary(account), "Codex B · Plus: 5 h 72 % · Woche 40 %")
+        soon = datetime.now(timezone.utc) + timedelta(hours=2, minutes=5, seconds=30)
+        account.limits.append(p.Limit("x", "Woche · Sonnet", 3, soon))
+        self.assertTrue(clt.account_summary(account).endswith("Sonnet 3 % (↻ 2 Std 5 Min)"))
         account.error = "HTTP 500"
         self.assertTrue(clt.account_summary(account).endswith("(veraltet)"))
 

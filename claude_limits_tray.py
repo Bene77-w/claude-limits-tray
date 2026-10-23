@@ -168,10 +168,14 @@ def icon_pixmaps(percent: float | None, stale: bool = False, letter: str = ""):
 
 
 def account_summary(account: Account) -> str:
-    """Eine Tooltip-Zeile: "Codex B · Plus: 5 h 72 % · Woche 40 %"."""
+    """Tooltip-Zeile: "Codex B · Plus: 5 h 72 % (↻ 2 Std 16 Min) · Woche 40 % (↻ 3 T 4 Std)"."""
     if not account.limits:
         return f"{account.title}: {account.error[:80] if account.error else 'lädt …'}"
-    values = " · ".join(f"{providers.short_label(l.label)} {l.percent:.0f} %" for l in account.limits[:2])
+    values = " · ".join(
+        f"{providers.short_label(l.label)} {l.percent:.0f} %"
+        + (f" (↻ {_countdown(l.resets_at)})" if l.resets_at else "")
+        for l in account.limits
+    )
     return f"{account.title}: {values}{' (veraltet)' if account.error else ''}"
 
 
@@ -433,6 +437,7 @@ class LimitsApp:
             providers.restore_cache(accounts)
         self.shown: Account | None = None
         self._last_scan = 0.0
+        self._icon_at = 0.0
         self._ever_active = False
         self._focus_in_at = 0.0
         self._win_size = (360, 300)
@@ -480,18 +485,30 @@ class LimitsApp:
     def _scan_activity(self):
         """Nutzung erkennen und lokal protokollierte Codex-Limits übernehmen."""
         now = self._last_scan = time.time()
-        changed = False
+        data_changed = False
         for account in self.accounts:
-            activity = account.scan_activity()
-            changed |= activity != account.activity
-            account.activity = activity
-            changed |= account.apply_live(account.live_limits(), now)
-        if changed:
+            account.activity = account.scan_activity()
+            data_changed |= account.apply_live(account.live_limits(), now)
+        if data_changed:
             self._update_view()
+        else:
+            self._reselect()  # Aktivität allein: Badges macht _tick, kein Neuaufbau
 
     def _update_view(self):
         self.shown = providers.choose_account(self.accounts, time.time())
         self.render()
+        self._refresh_icon()
+
+    def _reselect(self):
+        """Symbol wechseln, wenn ein anderes Abo dran ist (z. B. 10-min-Fenster abgelaufen)."""
+        shown = providers.choose_account(self.accounts, time.time())
+        if shown is not self.shown:
+            self.shown = shown
+            self._refresh_icon()
+            self._tick()
+
+    def _refresh_icon(self):
+        self._icon_at = time.time()
         try:
             self.sni.refresh_icon()
         except dbus.DBusException:
@@ -783,6 +800,10 @@ class LimitsApp:
         now = time.time()
         if now - self._last_scan >= ACTIVITY_SCAN_SECONDS:
             self._scan_activity()
+        else:
+            self._reselect()
+        if now - self._icon_at >= 60:
+            self._refresh_icon()  # Reset-Countdowns im Tooltip aktuell halten
         interval = UI_REFRESH_SECONDS if self.win.get_visible() else BG_REFRESH_SECONDS
         for account in self.accounts:
             if not account.refreshing and account.refresh_due(now, interval):

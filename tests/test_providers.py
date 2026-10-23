@@ -148,7 +148,7 @@ class ClaudeFetchTest(TempDirTest):
         self.account = p.ClaudeAccount(projects=self.dir, credentials=cred)
 
     def fetch_with(self, side_effect):
-        with mock.patch.object(p.urllib.request, "urlopen", side_effect=side_effect):
+        with mock.patch.object(p, "_urlopen", side_effect=side_effect):
             return self.account.fetch()
 
     def test_success(self):
@@ -167,6 +167,8 @@ class ClaudeFetchTest(TempDirTest):
             (_http_error(500), RuntimeError, p.ERROR_RETRY_SECONDS),
             (urllib.error.URLError("offline"), p.NetworkError, p.NETWORK_RETRY_SECONDS),
             (TimeoutError(), p.NetworkError, p.NETWORK_RETRY_SECONDS),
+            (p.http.client.IncompleteRead(b""), p.NetworkError, p.NETWORK_RETRY_SECONDS),
+            (_http_error(302), RuntimeError, p.ERROR_RETRY_SECONDS),
         ]
         for error, exc_type, delay in cases:
             with self.subTest(error=error):
@@ -177,6 +179,12 @@ class ClaudeFetchTest(TempDirTest):
     def test_invalid_json(self):
         with self.assertRaises(RuntimeError):
             self.fetch_with(lambda *a, **k: _Resp(b"<html>"))
+
+    def test_redirects_are_not_followed(self):
+        handler = p._NoRedirect()
+        req = p.urllib.request.Request("https://chatgpt.com/x", headers={"Authorization": "Bearer t"})
+        self.assertIsNone(handler.redirect_request(req, None, 302, "Found", {}, "https://evil.example/"))
+        self.assertTrue(any(isinstance(h, p._NoRedirect) for h in p._OPENER.handlers))
 
 
 class ClaudeActivityTest(TempDirTest):
@@ -193,6 +201,19 @@ class ClaudeActivityTest(TempDirTest):
         self.session("b", "deepseek-flash", 10)  # claude-dsh im selben Ordner
         account = p.ClaudeAccount(projects=self.dir)
         self.assertEqual(account.scan_activity(), claude_mtime)
+
+    def test_many_newer_dsh_sessions(self):
+        claude_mtime = self.session("claude", "claude-opus-5-5", 600)
+        for i in range(10):
+            self.session(f"dsh{i}", "deepseek-flash", 10 + i)
+        self.assertEqual(p.ClaudeAccount(projects=self.dir).scan_activity(), claude_mtime)
+
+    def test_model_before_large_tool_output(self):
+        path = self.dir / "proj" / "big.jsonl"
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(json.dumps({"message": {"model": "claude-opus-5-5"}}) + "\n"
+                        + json.dumps({"toolUseResult": "x" * (600 * 1024)}) + "\n")
+        self.assertEqual(p.ClaudeAccount(projects=self.dir).scan_activity(), path.stat().st_mtime)
 
     def test_none_without_claude(self):
         self.session("b", "deepseek-flash", 10)
@@ -248,12 +269,12 @@ class CodexAccountTest(TempDirTest):
         self.auth()
         seen = {}
 
-        def urlopen(req, timeout=0):
+        def urlopen(req, timeout=0):  # noqa: ARG001
             seen["url"] = req.full_url
             seen["account"] = req.get_header("Chatgpt-account-id")
             return _Resp(json.dumps(CODEX_PLUS).encode())
 
-        with mock.patch.object(p.urllib.request, "urlopen", side_effect=urlopen):
+        with mock.patch.object(p, "_urlopen", side_effect=urlopen):
             limits, plan = self.account.fetch()
         self.assertEqual(seen, {"url": "https://chatgpt.com/backend-api/wham/usage", "account": "acc-1"})
         self.assertEqual((plan, len(limits)), ("plus", 2))
@@ -357,9 +378,28 @@ class ApplyLiveTest(unittest.TestCase):
         self.assertFalse(account.apply_live((now - 10, limits, "plus"), now))
 
 
+class ApplyLiveKeepsBackoffTest(unittest.TestCase):
+    def test_live_values_do_not_lift_rate_limit_pause(self):
+        now = 100_000.0
+        account = _account("b", 5)
+        account.apply_error(p.RateLimitError("429", retry_after=0), now - 30)
+        pause_until = account.retry_after
+        limits = [p.Limit("primary", "5-Stunden-Limit", 30, None)]
+        self.assertTrue(account.apply_live((now - 5, limits, "plus"), now))
+        self.assertEqual((account.limits[0].percent, account.error), (30, None))
+        self.assertFalse(account.is_stale())
+        self.assertEqual((account.rate_limited, account.retry_after), (True, pause_until))
+        self.assertFalse(account.manual_refresh_allowed(now))
+        self.assertFalse(account.refresh_due(now, 60))
+        self.assertTrue(account.refresh_due(pause_until + 1, 60))  # danach Abruf zur Bestätigung
+        account.apply_error(p.RateLimitError("429", retry_after=0), pause_until + 2)
+        self.assertEqual(account.rate_limit_streak, 2)  # Backoff wächst weiter
+
+
 class DiscoverAndCacheTest(TempDirTest):
     def test_discover_codex_profiles(self):
-        for name, auth in ((".codex", True), (".codex-b", True), (".codex-c", False), (".codex-old.bak", True)):
+        for name, auth in ((".codex", True), (".codex-b", True), (".codex-c", False), (".codex-old.bak", True),
+                           (".codex-old", True), (".codex-b2", True), (".codex-a", True)):
             (self.dir / name).mkdir()
             if auth:
                 (self.dir / name / "auth.json").write_text("{}")
