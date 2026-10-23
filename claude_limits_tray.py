@@ -1,28 +1,20 @@
 #!/usr/bin/env python3
-"""Claude-Limits-Tray für Cinnamon/GTK.
+"""Abo-Limits-Tray für Cinnamon/GTK (Claude und Codex).
 
-Linksklick auf das Tray-Icon öffnet ein kleines Fenster mit dem
-5-Stunden- und Wochen-Limit des Claude-Abonnements.
-
-Datenquelle: GET https://api.anthropic.com/api/oauth/usage
-Auth: OAuth-Access-Token des Claude-Code-Logins aus ~/.claude/.credentials.json
-(wird nur im Speicher gehalten, nie ausgegeben).
+Das Tray-Symbol zeigt das Abo, das gerade benutzt wird; ein Linksklick öffnet
+ein kleines Fenster mit den Limits aller Abos. Datenquellen und Auswahl
+liegen in providers.py.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import os
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from datetime import datetime, timezone
 
 import dbus
 import dbus.mainloop.glib
@@ -38,9 +30,13 @@ try:
     from gi.repository import GdkX11
 except (ImportError, ValueError):  # z. B. unter Wayland
     GdkX11 = None
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
+
+import providers
+from providers import Account, AuthError, Limit
 
 APP_ID = "claude-limits-tray"
+APP_TITLE = "Abo-Limits"
 SNI_IFACE = "org.kde.StatusNotifierItem"
 SNI_SERVICE = f"{SNI_IFACE}-{os.getpid()}-1"
 SNI_PATH = "/StatusNotifierItem"
@@ -49,30 +45,14 @@ WATCHER_PATH = "/StatusNotifierWatcher"
 MENU_IFACE = "com.canonical.dbusmenu"
 MENU_PATH = "/MenuBar"
 CONTROL_NAME = "org.bene.ClaudeLimitsTray"
-USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
-CREDENTIALS = Path.home() / ".claude" / ".credentials.json"
-CACHE_FILE = Path.home() / ".cache" / "claude-limits-tray" / "usage.json"
 
-BG_REFRESH_SECONDS = 300    # Hintergrund-Aktualisierung
+BG_REFRESH_SECONDS = 300    # Hintergrund-Aktualisierung je Abo
 UI_REFRESH_SECONDS = 60     # Aktualisierung bei offenem Fenster
-NETWORK_RETRY_SECONDS = 60  # offline, DNS, Timeout
-ERROR_RETRY_SECONDS = 180   # Serverfehler, kaputte Antwort
-AUTH_RETRY_SECONDS = 300    # Token fehlt/abgelaufen (Dateiänderung löst früher aus)
-RATE_LIMIT_MAX_SECONDS = 1800  # Obergrenze des Backoffs bei wiederholtem 429
+ACTIVITY_SCAN_SECONDS = 10  # wie oft geprüft wird, welches Abo gerade benutzt wird
 
-EXPIRED_MSG = (
-    "Token abgelaufen. Claude Code einmal starten (oder /login ausführen); "
-    "die Anzeige aktualisiert sich danach von selbst."
-)
-
-# Reihenfolge und Beschriftung der angezeigten Limits
-LIMIT_KEYS = [
-    ("five_hour", "5-Stunden-Limit"),
-    ("seven_day", "Wochen-Limit"),
-    ("seven_day_sonnet", "Woche · Sonnet"),
-    ("seven_day_opus", "Woche · Opus"),
-    ("seven_day_oauth_apps", "Woche · Apps"),
-    ("seven_day_cowork", "Woche · Cowork"),
+FONT_PATHS = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf",
 ]
 
 # Farbstufen: Ring im Tray und Balken im Fenster nutzen dieselben Werte
@@ -82,206 +62,6 @@ LEVEL_RGB = {
     "hot": (240, 133, 45),
     "crit": (229, 72, 77),
 }
-
-
-# ---------------------------------------------------------------- Datenmodell
-
-
-@dataclass
-class Limit:
-    key: str
-    label: str
-    percent: float
-    resets_at: datetime | None
-
-
-class AuthError(RuntimeError):
-    """Token fehlt, ist abgelaufen oder wird vom Server abgelehnt."""
-
-
-class NetworkError(RuntimeError):
-    """Server nicht erreichbar (offline, DNS, Timeout)."""
-
-
-class RateLimitError(RuntimeError):
-    """HTTP 429 - mit Wartezeit aus dem Retry-After-Header."""
-
-    def __init__(self, message, retry_after=ERROR_RETRY_SECONDS):
-        super().__init__(message)
-        self.retry_after = retry_after
-
-
-def retry_delay(exc: Exception, streak: int = 1) -> int:
-    """Wartezeit bis zum nächsten automatischen Versuch nach einem Fehler.
-
-    `streak` zählt aufeinanderfolgende 429-Antworten. Der Server schickt oft
-    `Retry-After: 0`, sperrt aber weiter - darum verdoppelt sich die Pause.
-    """
-    if isinstance(exc, RateLimitError):
-        backoff = ERROR_RETRY_SECONDS * 2 ** (max(1, streak) - 1)
-        return min(RATE_LIMIT_MAX_SECONDS, max(exc.retry_after, backoff))
-    if isinstance(exc, AuthError):
-        return AUTH_RETRY_SECONDS
-    if isinstance(exc, NetworkError):
-        return NETWORK_RETRY_SECONDS
-    return ERROR_RETRY_SECONDS
-
-
-def _epoch_seconds(value: float) -> float:
-    # Claude Code speichert Zeitpunkte in Millisekunden
-    return value / 1000.0 if value > 1e11 else float(value)
-
-
-def load_token() -> str:
-    """Nur der Claude-Code-Login zählt - andere Tokens (z. B. MCP) nie senden."""
-    env = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
-    if env:
-        return env
-    try:
-        data = json.loads(CREDENTIALS.read_text())
-    except FileNotFoundError:
-        raise AuthError(
-            "Keine Claude-Anmeldung gefunden (~/.claude/.credentials.json fehlt)."
-        ) from None
-    except ValueError:
-        # Claude Code schreibt die Datei vermutlich gerade neu
-        raise RuntimeError("Anmeldedaten gerade nicht lesbar, neuer Versuch folgt.") from None
-    except OSError as exc:
-        raise AuthError(f"Anmeldedaten nicht lesbar: {type(exc).__name__}") from None
-
-    oauth = data.get("claudeAiOauth") if isinstance(data, dict) else None
-    token = oauth.get("accessToken") if isinstance(oauth, dict) else None
-    if not isinstance(token, str) or not token:
-        raise AuthError("Kein Claude-Login gefunden. Claude Code starten und /login ausführen.")
-    expires = oauth.get("expiresAt")
-    if isinstance(expires, (int, float)) and _epoch_seconds(expires) < time.time():
-        raise AuthError(EXPIRED_MSG)
-    return token
-
-
-def load_cache():
-    """Zuletzt erfolgreich geladene Werte (überlebt Neustarts)."""
-    try:
-        data = json.loads(CACHE_FILE.read_text())
-        limits = [
-            Limit(e["key"], e["label"], float(e["percent"]), _parse_reset(e.get("resets_at")))
-            for e in data["limits"]
-        ]
-        return limits, float(data.get("ts") or 0.0)
-    except (OSError, ValueError, KeyError, TypeError):
-        return [], 0.0
-
-
-def save_cache(limits):
-    payload = {
-        "ts": time.time(),
-        "limits": [
-            {
-                "key": l.key,
-                "label": l.label,
-                "percent": l.percent,
-                "resets_at": l.resets_at.isoformat() if l.resets_at else None,
-            }
-            for l in limits
-        ],
-    }
-    tmp = CACHE_FILE.with_suffix(".tmp")
-    try:
-        CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(payload))
-        os.replace(tmp, CACHE_FILE)  # atomar: nie eine halb geschriebene Datei
-    except OSError:
-        pass
-
-
-def _parse_reset(value):
-    if not value:
-        return None
-    if isinstance(value, (int, float)):
-        try:
-            return datetime.fromtimestamp(_epoch_seconds(value), tz=timezone.utc)
-        except (OverflowError, OSError, ValueError):
-            return None
-    try:
-        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    # Ohne Zeitzone als UTC werten, sonst scheitert der Vergleich mit "jetzt"
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-
-
-def parse_usage(payload) -> list[Limit]:
-    """Antwort des Usage-Endpoints in Limits übersetzen.
-
-    `utilization` ist ein Prozentwert (0..100, über 100 möglich). Keine
-    Umrechnung aus 0..1 raten: 1.0 heißt 1 %, nicht 100 %.
-    """
-    data = payload.get("usage", payload) if isinstance(payload, dict) else None
-    if not isinstance(data, dict):
-        raise RuntimeError("Unerwartete Antwort vom Server.")
-    limits = []
-    for key, label in LIMIT_KEYS:
-        entry = data.get(key)
-        if not isinstance(entry, dict):
-            continue
-        try:
-            pct = float(entry["utilization"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        limits.append(Limit(key, label, max(0.0, pct), _parse_reset(entry.get("resets_at"))))
-    if not limits:
-        raise RuntimeError("Antwort enthielt keine Limit-Daten.")
-    return limits
-
-
-def fetch_usage(timeout: float = 15.0) -> list[Limit]:
-    token = load_token()
-    req = urllib.request.Request(
-        USAGE_URL,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "anthropic-beta": "oauth-2025-04-20",
-            "User-Agent": "claude-limits-tray/1.1",
-            "Accept": "application/json",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = resp.read()
-    except urllib.error.HTTPError as exc:
-        if exc.code == 401:
-            raise AuthError(EXPIRED_MSG) from exc
-        if exc.code == 403:
-            raise AuthError(
-                "Zugriff verweigert (HTTP 403): Token ungültig oder ohne Berechtigung "
-                "für Nutzungsdaten. In Claude Code neu anmelden (/login)."
-            ) from exc
-        if exc.code == 429:
-            try:
-                wait = int(float((exc.headers or {}).get("retry-after") or ERROR_RETRY_SECONDS))
-            except (TypeError, ValueError):
-                wait = ERROR_RETRY_SECONDS  # z. B. Retry-After als HTTP-Datum
-            raise RateLimitError("Zu viele Anfragen (HTTP 429)", max(0, min(wait, RATE_LIMIT_MAX_SECONDS))) from exc
-        raise RuntimeError(f"Serverfehler (HTTP {exc.code})") from exc
-    except urllib.error.URLError as exc:
-        raise NetworkError(f"Keine Verbindung: {exc.reason}") from exc
-    except OSError as exc:  # Timeout beim Lesen u. Ä.
-        raise NetworkError(f"Keine Verbindung: {type(exc).__name__}") from exc
-
-    try:
-        payload = json.loads(body.decode("utf-8"))
-    except ValueError:
-        raise RuntimeError("Antwort des Servers war kein gültiges JSON.") from None
-    return parse_usage(payload)
-
-
-def demo_limits() -> list[Limit]:
-    now = datetime.now(timezone.utc)
-    return [
-        Limit("five_hour", "5-Stunden-Limit", 34, now + timedelta(hours=2, minutes=17)),
-        Limit("seven_day", "Wochen-Limit", 61, now + timedelta(days=3, hours=4)),
-        Limit("seven_day_sonnet", "Woche · Sonnet", 22, now + timedelta(days=3, hours=4)),
-    ]
 
 
 # ------------------------------------------------------------------- Darstellung
@@ -336,37 +116,63 @@ def _reset_text(limit: Limit) -> str:
     return f"Zurückgesetzt in {_countdown(limit.resets_at)} · {_local_time(limit.resets_at)}"
 
 
-def render_icon(percent: float | None, size: int = 32, stale: bool = False) -> Image.Image:
-    """Ringdiagramm: gefüllter Teil = verbrauchtes Limit.
+def _font(px: int):
+    for path in FONT_PATHS:
+        try:
+            return ImageFont.truetype(path, px)
+        except OSError:
+            continue
+    return ImageFont.load_default(px)
+
+
+def render_icon(
+    percent: float | None, size: int = 32, stale: bool = False, letter: str = ""
+) -> Image.Image:
+    """Ringdiagramm: gefüllter Teil = verbrauchtes Limit, Buchstabe = Abo.
 
     Ohne Daten erscheint ein gepunkteter Ring, bei veralteten Werten (Fehler)
     ein blasser Ring - beides soll nicht wie ein gültiger Wert aussehen.
     """
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    pad = max(2, size // 10)
-    width = max(3, size // 5)
+    pad = max(1, size // 16)
+    width = max(2, size // 7)
     box = (pad, pad, size - pad - 1, size - pad - 1)
     if percent is None:
         for start in range(-90, 270, 30):
             draw.arc(box, start, start + 14, fill=(150, 150, 150, 220), width=width)
         return img
+    alpha = 120 if stale else 255
+    color = LEVEL_RGB[_level(percent)]
     draw.arc(box, 0, 360, fill=(130, 130, 130, 110), width=width)
     sweep = min(percent, 100.0) / 100.0 * 360.0
     if sweep > 0.5:
-        alpha = 120 if stale else 255
-        draw.arc(box, -90, -90 + sweep, fill=LEVEL_RGB[_level(percent)] + (alpha,), width=width)
+        draw.arc(box, -90, -90 + sweep, fill=color + (alpha,), width=width)
+    if letter:
+        inner = size - 2 * (pad + width)
+        draw.text(
+            (size / 2, size / 2), letter, font=_font(max(7, int(inner * 0.95))),
+            fill=color + (alpha,), anchor="mm",
+        )
     return img
 
 
-def icon_pixmaps(percent: float | None, stale: bool = False):
+def icon_pixmaps(percent: float | None, stale: bool = False, letter: str = ""):
     """ARGB32-Pixmaps im SNI-Format (a(iiay))."""
     out = []
     for size in (22, 32, 48, 64):
-        r, g, b, a = render_icon(percent, size, stale).split()
+        r, g, b, a = render_icon(percent, size, stale, letter).split()
         argb = Image.merge("RGBA", (a, r, g, b)).tobytes()  # A,R,G,B
         out.append(dbus.Struct((size, size, dbus.ByteArray(argb)), signature="iiay"))
     return dbus.Array(out, signature="(iiay)")
+
+
+def account_summary(account: Account) -> str:
+    """Eine Tooltip-Zeile: "Codex B · Plus: 5 h 72 % · Woche 40 %"."""
+    if not account.limits:
+        return f"{account.title}: {account.error[:80] if account.error else 'lädt …'}"
+    values = " · ".join(f"{providers.short_label(l.label)} {l.percent:.0f} %" for l in account.limits[:2])
+    return f"{account.title}: {values}{' (veraltet)' if account.error else ''}"
 
 
 # ------------------------------------------------------------------ Tray (SNI)
@@ -396,7 +202,12 @@ class StatusNotifierItem(dbus.service.Object):
 
     # --- Properties -----------------------------------------------------
     def _props(self) -> dict:
-        pixmaps = icon_pixmaps(self.app.icon_percent(), stale=self.app.is_stale())
+        shown = self.app.shown
+        pixmaps = icon_pixmaps(
+            shown.max_percent() if shown else None,
+            stale=bool(shown and shown.is_stale()),
+            letter=shown.short if shown else "",
+        )
         title, text = self.app.tooltip_lines()
         tooltip = dbus.Struct(
             ("", pixmaps, dbus.String(title), dbus.String(text)), signature="sa(iiay)ss"
@@ -404,7 +215,7 @@ class StatusNotifierItem(dbus.service.Object):
         return {
             "Category": dbus.String("ApplicationStatus"),
             "Id": dbus.String(APP_ID),
-            "Title": dbus.String("Claude Limits"),
+            "Title": dbus.String(APP_TITLE),
             "Status": dbus.String("Active"),
             "WindowId": dbus.Int32(0),
             "IconName": dbus.String(""),
@@ -589,6 +400,9 @@ window.limits-card {
   border: 1px solid alpha(@theme_fg_color, 0.18);
 }
 .limits-title { font-weight: bold; font-size: 1.02em; }
+.account-title { font-weight: bold; }
+.account-badge { opacity: 0.65; font-size: 0.85em; }
+.account-badge.shown { opacity: 1; }
 .limit-name { font-weight: 600; }
 .limit-value { font-weight: bold; font-size: 1.15em; }
 .limit-reset { opacity: 0.65; font-size: 0.85em; }
@@ -602,113 +416,99 @@ progressbar progress { min-height: 8px; border-radius: 4px; }
 )
 
 
-def _mtime(path: Path) -> float | None:
-    try:
-        return path.stat().st_mtime
-    except OSError:
-        return None
+def _label(text="", css=None, xalign=0.0) -> Gtk.Label:
+    label = Gtk.Label(label=text)
+    label.set_xalign(xalign)
+    if css:
+        label.get_style_context().add_class(css)
+    return label
 
 
 class LimitsApp:
-    def __init__(self, bus, demo=False):
+    def __init__(self, bus, accounts: list[Account], demo=False):
         self.bus = bus
+        self.accounts = accounts
         self.demo = demo
-        self.limits, cached_ts = ([], 0.0) if demo else load_cache()
-        self.last_update: float | None = cached_ts or None
-        self.error: str | None = None
-        self.rate_limited = False
-        self.rate_limit_streak = 0
-        self.auth_failed = False
-        self._cred_mtime: float | None = None
-        self.retry_after = 0.0
-        self.refreshing = False
+        if not demo:
+            providers.restore_cache(accounts)
+        self.shown: Account | None = None
+        self._last_scan = 0.0
         self._ever_active = False
         self._focus_in_at = 0.0
-        self._win_size = (340, 260)
-        self.rows: list[dict] = []
+        self._win_size = (360, 300)
+        self.sections: list[dict] = []
 
         self._build_window()
         self.sni = StatusNotifierItem(bus, self)
         self.menu = Menu(bus, self)
 
-        if self.limits:
-            self.render()
+        self._scan_activity()
+        self._update_view()
         GLib.timeout_add_seconds(1, self._periodic)
-        self.refresh()
+        for account in accounts:
+            self.refresh(account)
 
     # --- Daten ----------------------------------------------------------
-    def refresh(self):
-        if self.refreshing:
+    def refresh(self, account: Account):
+        if account.refreshing:
             return
-        self.refreshing = True
-        self.set_footer("Aktualisiere …")
+        account.refreshing = True
+        self._tick()
 
         def work():
             try:
-                data = demo_limits() if self.demo else fetch_usage()
+                result = account.fetch()
             except Exception as exc:  # noqa: BLE001 - jeder Fehler soll im Fenster sichtbar werden
-                GLib.idle_add(self._apply, None, exc)
+                GLib.idle_add(self._apply, account, None, exc)
             else:
-                GLib.idle_add(self._apply, data, None)
+                GLib.idle_add(self._apply, account, result, None)
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _apply(self, data, exc):
-        self.refreshing = False
+    def _apply(self, account: Account, result, exc):
+        account.refreshing = False
         if exc is None:
-            self.limits = data
-            self.last_update = time.time()
-            self.error = None
-            self.rate_limited = self.auth_failed = False
-            self.rate_limit_streak = 0
-            self.retry_after = 0.0
+            limits, plan = result
+            account.apply_success(limits, time.time(), plan)
             if not self.demo:
-                save_cache(data)
-            self.render()
+                providers.save_cache(self.accounts)
         else:
-            self.error = str(exc) or type(exc).__name__
-            self.rate_limited = isinstance(exc, RateLimitError)
-            self.rate_limit_streak = self.rate_limit_streak + 1 if self.rate_limited else 0
-            self.auth_failed = isinstance(exc, AuthError)
-            self._cred_mtime = _mtime(CREDENTIALS)
-            # Bei Fehlern (z. B. 429) nicht im Minutentakt weiter anfragen
-            self.retry_after = time.time() + retry_delay(exc, self.rate_limit_streak)
-            self.render_error()
-        self._tick()
+            account.apply_error(exc, time.time())
+        self._update_view()
+        return False
+
+    def _scan_activity(self):
+        """Nutzung erkennen und lokal protokollierte Codex-Limits übernehmen."""
+        now = self._last_scan = time.time()
+        changed = False
+        for account in self.accounts:
+            activity = account.scan_activity()
+            changed |= activity != account.activity
+            account.activity = activity
+            changed |= account.apply_live(account.live_limits(), now)
+        if changed:
+            self._update_view()
+
+    def _update_view(self):
+        self.shown = providers.choose_account(self.accounts, time.time())
+        self.render()
         try:
             self.sni.refresh_icon()
         except dbus.DBusException:
             pass  # Tray darf nie die App killen
-        return False
-
-    def _refresh_due(self, now: float) -> bool:
-        if self.auth_failed and _mtime(CREDENTIALS) != self._cred_mtime:
-            return True  # Claude Code hat den Token vermutlich erneuert
-        if now < self.retry_after:
-            return False
-        if self.error:
-            return True  # Wartezeit nach dem Fehler ist abgelaufen
-        interval = UI_REFRESH_SECONDS if self.win.get_visible() else BG_REFRESH_SECONDS
-        return self.last_update is None or now - self.last_update >= interval
-
-    def icon_percent(self) -> float | None:
-        return max((limit.percent for limit in self.limits), default=None)
-
-    def is_stale(self) -> bool:
-        return bool(self.error and self.limits)
 
     def tooltip_lines(self) -> tuple[str, str]:
-        if not self.limits:
-            return "Claude Limits", self.error[:110] if self.error else "Lade …"
-        values = " · ".join(f"{l.label.split(' · ')[0]}: {l.percent:.0f} %" for l in self.limits[:2])
-        if self.error:
-            return "Claude Limits (veraltet)", f"{values}\n{self.error[:110]}"
-        return "Claude Limits", values
+        title = f"{APP_TITLE} · {self.shown.title}" if self.shown else APP_TITLE
+        lines = [
+            f"{'▸ ' if account is self.shown else ''}{account_summary(account)}"
+            for account in self.accounts
+        ]
+        return title, "\n".join(lines)
 
     # --- UI -------------------------------------------------------------
     def _build_window(self):
         self.win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
-        self.win.set_title("Claude Limits")
+        self.win.set_title(APP_TITLE)
         self.win.set_skip_taskbar_hint(True)
         self.win.set_skip_pager_hint(True)
         self.win.set_position(Gtk.WindowPosition.NONE)
@@ -733,23 +533,20 @@ class LimitsApp:
         )
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        outer.set_size_request(340, -1)
+        outer.set_size_request(360, -1)
         self.outer = outer
 
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
         header.set_margin_start(16)
         header.set_margin_end(10)
         header.set_margin_top(10)
-        header.set_margin_bottom(6)
+        header.set_margin_bottom(4)
         header.set_size_request(-1, 30)
         header.connect("button-press-event", self._start_drag)
-        title = Gtk.Label(label="Claude Limits")
-        title.get_style_context().add_class("limits-title")
-        title.set_xalign(0)
-        header.pack_start(title, True, True, 0)
+        header.pack_start(_label(APP_TITLE, "limits-title"), True, True, 0)
         refresh_button = Gtk.Button.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.BUTTON)
         refresh_button.set_relief(Gtk.ReliefStyle.NONE)
-        refresh_button.set_tooltip_text("Aktualisieren")
+        refresh_button.set_tooltip_text("Alle aktualisieren")
         refresh_button.connect("clicked", lambda *_: self.force_refresh())
         header.pack_end(refresh_button, False, False, 0)
         close_button = Gtk.Button.new_from_icon_name("window-close-symbolic", Gtk.IconSize.BUTTON)
@@ -759,120 +556,122 @@ class LimitsApp:
         header.pack_end(close_button, False, False, 0)
         outer.pack_start(header, False, False, 0)
 
-        self.rows_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
-        self.rows_box.set_margin_start(16)
-        self.rows_box.set_margin_end(16)
-        self.rows_box.set_margin_top(4)
-        self.rows_box.set_margin_bottom(10)
-        outer.pack_start(self.rows_box, False, False, 0)
+        self.sections_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.sections_box.set_margin_start(16)
+        self.sections_box.set_margin_end(16)
+        outer.pack_start(self.sections_box, False, False, 0)
 
-        self.error_label = Gtk.Label()
-        self.error_label.set_line_wrap(True)
-        self.error_label.set_max_width_chars(42)
-        self.error_label.set_xalign(0)
-        self.error_label.get_style_context().add_class("hint")
-        self.error_label.set_margin_start(16)
-        self.error_label.set_margin_end(16)
-        self.error_label.set_margin_bottom(10)
-        self.error_label.set_no_show_all(True)
-        outer.pack_start(self.error_label, False, False, 0)
-
-        self.footer = Gtk.Label(label="")
-        self.footer.get_style_context().add_class("footer")
-        self.footer.set_xalign(0)
+        self.footer = _label(f"Automatisch alle {UI_REFRESH_SECONDS} s bei offenem Fenster", "footer")
         self.footer.set_margin_start(16)
         self.footer.set_margin_end(16)
+        self.footer.set_margin_top(4)
         self.footer.set_margin_bottom(12)
         outer.pack_start(self.footer, False, False, 0)
 
         self.win.add(outer)
 
-    def _clear_rows(self):
-        for child in self.rows_box.get_children():
-            self.rows_box.remove(child)
-        self.rows = []
+    def _add_section(self, account: Account):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.set_margin_top(6)
+        if self.sections:
+            box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 4)
 
-    def _add_row(self, limit: Limit):
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        head.pack_start(_label(account.title, "account-title"), True, True, 0)
+        badge = _label(css="account-badge", xalign=1.0)
+        head.pack_end(badge, False, False, 0)
+        box.pack_start(head, False, False, 0)
 
-        top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        name = Gtk.Label(label=limit.label)
-        name.get_style_context().add_class("limit-name")
-        name.set_xalign(0)
-        value = Gtk.Label(label=f"{limit.percent:.0f} %")
-        value.get_style_context().add_class("limit-value")
-        value.set_xalign(1)
-        top.pack_start(name, True, True, 0)
-        top.pack_end(value, False, False, 0)
+        rows = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        resets = []
+        for limit in account.limits:
+            row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+            top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            top.pack_start(_label(limit.label, "limit-name"), True, True, 0)
+            top.pack_end(_label(f"{limit.percent:.0f} %", "limit-value", 1.0), False, False, 0)
+            bar = Gtk.ProgressBar()
+            bar.set_fraction(min(limit.percent, 100.0) / 100.0)
+            bar.get_style_context().add_class(_level(limit.percent))
+            reset = _label(_reset_text(limit), "limit-reset")
+            resets.append((limit, reset))
+            for widget in (top, bar, reset):
+                row.pack_start(widget, False, False, 0)
+            rows.pack_start(row, False, False, 0)
+        # Werte bleiben bei Fehlern sichtbar, aber erkennbar veraltet
+        rows.set_opacity(0.55 if account.is_stale() else 1.0)
+        box.pack_start(rows, False, False, 0)
 
-        bar = Gtk.ProgressBar()
-        bar.set_fraction(min(limit.percent, 100.0) / 100.0)
-        bar.set_show_text(False)
-        bar.get_style_context().add_class(_level(limit.percent))
+        if account.error:
+            error = _label(self._error_text(account), "hint")
+            error.set_line_wrap(True)
+            error.set_max_width_chars(44)
+            box.pack_start(error, False, False, 0)
+        status = _label(css="footer")
+        box.pack_start(status, False, False, 0)
 
-        reset = Gtk.Label(label=_reset_text(limit))
-        reset.get_style_context().add_class("limit-reset")
-        reset.set_xalign(0)
+        self.sections_box.pack_start(box, False, False, 0)
+        self.sections.append({"account": account, "badge": badge, "status": status, "resets": resets})
 
-        box.pack_start(top, False, False, 0)
-        box.pack_start(bar, False, False, 0)
-        box.pack_start(reset, False, False, 0)
-        self.rows_box.pack_start(box, False, False, 0)
-        self.rows.append({"limit": limit, "reset": reset})
+    @staticmethod
+    def _error_text(account: Account) -> str:
+        if account.rate_limited:
+            return "Anfrage-Limit erreicht (HTTP 429) – automatische Pause bis zum nächsten Versuch."
+        return account.error or "Unbekannter Fehler"
 
     def render(self):
-        self._clear_rows()
-        for limit in self.limits:
-            self._add_row(limit)
-        self.rows_box.set_opacity(1.0)
-        self.error_label.hide()
-        self.rows_box.show_all()
+        for child in self.sections_box.get_children():
+            self.sections_box.remove(child)
+        self.sections = []
+        for account in self.accounts:
+            self._add_section(account)
+        self.sections_box.show_all()
+        self._tick()
         if self.win.get_visible():
             self._fit(place=False)
-
-    def render_error(self):
-        text = self.error or "Unbekannter Fehler"
-        if self.rate_limited:
-            text = "Anfrage-Limit erreicht (HTTP 429) – automatische Pause bis zum nächsten Versuch."
-        self.error_label.set_text(text)
-        self.error_label.show()
-        if self.limits:
-            self.rows_box.set_opacity(0.55)  # Werte bleiben sichtbar, aber erkennbar veraltet
-        else:
-            self._clear_rows()
-        if self.win.get_visible():
-            self._fit(place=False)
-
-    def set_footer(self, text):
-        self.footer.set_text(text)
 
     def _tick(self):
-        """Laufende Countdowns und Statuszeile aktualisieren."""
+        """Countdowns, Aktivität und Statuszeilen aktualisieren."""
         if not self.win.get_visible():
             return
-        for row in self.rows:
-            row["reset"].set_text(_reset_text(row["limit"]))
-        if self.refreshing:
-            return  # Fußzeile zeigt "Aktualisiere …"
         now = time.time()
+        for section in self.sections:
+            account: Account = section["account"]
+            for limit, label in section["resets"]:
+                label.set_text(_reset_text(limit))
+            badge = section["badge"]
+            badge_ctx = badge.get_style_context()
+            if account is self.shown:
+                badge.set_text("● im Tray" + (" · aktiv" if account.is_active(now) else ""))
+                badge_ctx.add_class("shown")
+            else:
+                badge_ctx.remove_class("shown")
+                if account.is_active(now):
+                    badge.set_text("aktiv")
+                elif account.activity:
+                    badge.set_text(f"genutzt vor {_duration(now - account.activity)}")
+                else:
+                    badge.set_text("")
+            section["status"].set_text(self._status_text(account, now))
+
+    @staticmethod
+    def _status_text(account: Account, now: float) -> str:
+        if account.refreshing:
+            return "Aktualisiere …"
         parts = []
-        if self.error:
-            if self.retry_after > now:
-                parts.append(f"Nächster Versuch in {_duration(self.retry_after - now)}")
-            if self.last_update:
-                parts.append(f"Werte von vor {_duration(now - self.last_update)}")
-        elif self.last_update:
-            parts.append(f"Aktualisiert vor {_duration(now - self.last_update)}")
-            parts.append(f"auto alle {UI_REFRESH_SECONDS} s")
-        self.set_footer(" · ".join(parts))
+        if account.error and account.retry_after > now:
+            parts.append(f"Nächster Versuch in {_duration(account.retry_after - now)}")
+        if account.last_update:
+            parts.append(
+                f"{'Werte von' if account.error else 'Aktualisiert'} vor {_duration(now - account.last_update)}"
+            )
+        return " · ".join(parts)
 
     # --- Verhalten ------------------------------------------------------
     def _fit(self, place=True):
         """Größe vor dem Anzeigen bestimmen, damit kein Zwischenzustand flackert."""
         self.outer.show_all()
-        self.error_label.set_visible(bool(self.error))
         natural = self.outer.get_preferred_size()[1]
-        self._win_size = (max(340, natural.width), natural.height)
+        self._win_size = (max(360, natural.width), natural.height)
         self.win.resize(*self._win_size)
         self.win.show()
         if place:
@@ -975,13 +774,19 @@ class LimitsApp:
     def force_refresh(self):
         if not self.win.get_visible():
             self.open_window()
-        if self.rate_limited and time.time() < self.retry_after:
-            return  # Bei 429 würde jede weitere Anfrage die Sperre nur verlängern
-        self.refresh()
+        now = time.time()
+        for account in self.accounts:
+            if account.manual_refresh_allowed(now):
+                self.refresh(account)
 
     def _periodic(self):
-        if not self.refreshing and self._refresh_due(time.time()):
-            self.refresh()
+        now = time.time()
+        if now - self._last_scan >= ACTIVITY_SCAN_SECONDS:
+            self._scan_activity()
+        interval = UI_REFRESH_SECONDS if self.win.get_visible() else BG_REFRESH_SECONDS
+        for account in self.accounts:
+            if not account.refreshing and account.refresh_due(now, interval):
+                self.refresh(account)
         self._tick()
         return True
 
@@ -989,31 +794,35 @@ class LimitsApp:
         Gtk.main_quit()
 
 
-def _cli_print():
-    try:
-        limits = fetch_usage()
-    except AuthError as exc:
-        print(f"Auth-Fehler: {exc}", file=sys.stderr)
-        return 2
-    except Exception as exc:  # noqa: BLE001
-        print(f"Fehler: {exc}", file=sys.stderr)
-        return 1
-    for limit in limits:
-        print(f"{limit.label:24s} {limit.percent:6.1f} %  Reset {_local_time(limit.resets_at)}")
-    return 0
+def _cli_print(accounts: list[Account]) -> int:
+    status = 0
+    for account in accounts:
+        try:
+            limits, plan = account.fetch()
+        except Exception as exc:  # noqa: BLE001
+            kind = "Auth-Fehler" if isinstance(exc, AuthError) else "Fehler"
+            print(f"{account.name}: {kind}: {exc}", file=sys.stderr)
+            status = 1
+            continue
+        account.plan = plan
+        print(account.title)
+        for limit in limits:
+            print(f"  {limit.label:22s} {limit.percent:6.1f} %  Reset {_local_time(limit.resets_at)}")
+    return status
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        prog="claude-limits-tray", description="Zeigt die Claude-Nutzungslimits im Tray."
+        prog="claude-limits-tray", description="Zeigt die Limits der Claude- und Codex-Abos im Tray."
     )
     parser.add_argument("--demo", action="store_true", help="Beispielwerte, ohne Netzwerk")
     parser.add_argument(
         "--print", dest="print_only", action="store_true", help="Werte einmal auf der Konsole ausgeben"
     )
     args = parser.parse_args(argv)
+    accounts = providers.demo_accounts() if args.demo else providers.discover_accounts()
     if args.print_only:
-        return _cli_print()
+        return _cli_print(accounts)
 
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     try:
@@ -1033,7 +842,7 @@ def main(argv=None):
         return 0
 
     _sni_name = dbus.service.BusName(SNI_SERVICE, bus)  # noqa: F841 - Name halten
-    app = LimitsApp(bus, demo=args.demo)
+    app = LimitsApp(bus, accounts, demo=args.demo)
 
     # Beim StatusNotifierWatcher (Cinnamon-Panel) registrieren, ggf. mit Wiederholung
     def register_sni(remaining=6):

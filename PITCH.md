@@ -12,6 +12,9 @@ Ein Tray-Symbol in der Cinnamon-Leiste, das den Verbrauch permanent sichtbar mac
 Der Ring zeigt den höchsten ausgeschöpften Wert, ein Linksklick öffnet ein kleines
 Fenster mit 5-Stunden- und Wochen-Limit, Prozentwert, Reset-Countdown und Reset-Uhrzeit.
 Kein Browser, kein Kontextwechsel.
+Seit Version 1.2 auch für alle Codex-Profile (ChatGPT-Abos): Das Symbol zeigt
+mit Buchstabe (C/A/B) das gerade benutzte Abo, bei mehreren das am stärksten
+ausgelastete.
 
 ## Funktionsumfang (Scope)
 
@@ -39,8 +42,9 @@ Kein Browser, kein Kontextwechsel.
 
 | Datei | Zeilen | Zweck |
 |---|---:|---|
-| `~/claude-limits-tray/claude_limits_tray.py` | 1057 | Gesamte App: Abruf, Tray-Item, Menü, Fenster |
-| `~/claude-limits-tray/tests/test_core.py` | 188 | Unit-Tests für Abruf, Token-Auswahl, Backoff, Icon |
+| `~/claude-limits-tray/claude_limits_tray.py` | 883 | Tray-Item, Menü, Fenster |
+| `~/claude-limits-tray/providers.py` | 642 | Claude/Codex-Abruf, Aktivitätserkennung, Auswahl, Cache |
+| `~/claude-limits-tray/tests/` | 434 | Unit-Tests (Abruf, Token-Auswahl, Backoff, Auswahl, Icon) |
 | `~/claude-limits-tray/README.md` | — | Installation, Bedienung, Datenquelle, Fehlerfälle |
 | `~/claude-limits-tray/install.sh` / `uninstall.sh` | — | Symlink und Autostart einrichten bzw. entfernen |
 | `~/claude-limits-tray/claude-limits-tray.desktop` | — | Autostart-Vorlage (wird von `install.sh` befüllt) |
@@ -64,12 +68,12 @@ Kein Browser, kein Kontextwechsel.
 
 ## Status
 
-Prototyp am 23.10.2026 überarbeitet und als lokales Git-Repository angelegt.
-Behoben: falsche Token-Wahl (MCP-Token konnte gesendet werden), falsche
-Prozent-Umrechnung bei Werten ≤ 1, fehlende Neuanmeldung nach Panel-Neustart,
-Dauer-Anfragen bei `HTTP 429` mit `Retry-After: 0` (jetzt exponentielles Backoff),
-veraltete Werte im Symbol nicht erkennbar. 19 Unit-Tests; live geprüft:
-Registrierung im Panel, Tooltip, Menü, Einzelinstanz, Fehleranzeige.
+23.10.2026: Prototyp überarbeitet (Token-Wahl, Prozent-Umrechnung, 429-Backoff,
+Panel-Neustart, Fokus) und um Codex-Abos erweitert (Branch `feature/codex-abos`,
+Review-Anker `c492ca5`). Das Symbol zeigt das gerade benutzte Abo; bei mehreren
+das mit dem höchsten Verbrauch. 35 Unit-Tests; live geprüft mit echten Daten
+(Claude Pro, Codex A Free, Codex B Plus) und End-to-End mit simuliertem
+Codex-Profil auf eigenem D-Bus.
 
 ## Nächste Schritte (optional)
 
