@@ -32,6 +32,7 @@ ERROR_RETRY_SECONDS = 180       # Serverfehler, kaputte Antwort
 AUTH_RETRY_SECONDS = 300        # Token fehlt/abgelaufen (Dateiänderung löst früher aus)
 RATE_LIMIT_MAX_SECONDS = 1800   # Obergrenze des Backoffs bei wiederholtem 429
 TAIL_BYTES = 256 * 1024         # so viel vom Ende einer Sitzungsdatei wird gelesen
+FULL_SCAN_SECONDS = 300         # Abstand vollständiger Scans des Codex-Sitzungsarchivs
 
 CLAUDE_EXPIRED_MSG = (
     "Token abgelaufen. Claude Code einmal starten (oder /login ausführen); "
@@ -542,6 +543,7 @@ class CodexAccount(Account):
         )
         self._newest: tuple[float, Path] | None = None
         self._live_seen: tuple[float, Path] | None = None
+        self._full_scan_at = float("-inf")
 
     def fetch(self, timeout: float = 15.0):
         access, account = load_codex_auth(self.home, self.expired_msg)
@@ -557,9 +559,25 @@ class CodexAccount(Account):
     def credentials_path(self):
         return self.home / "auth.json"
 
-    def scan_activity(self):
-        # Codex hängt bei jeder Antwort an die Rollout-Datei der Sitzung an
-        self._newest = _newest((self.home / "sessions").glob("*/*/*/rollout-*.jsonl"))
+    def scan_activity(self, now: float | None = None):
+        """Codex hängt bei jeder Antwort an die Rollout-Datei der Sitzung an.
+
+        Das Archiv (`sessions/JJJJ/MM/TT/`) wächst ohne Grenze. Darum nur alle
+        FULL_SCAN_SECONDS alles prüfen, dazwischen die zwei neuesten
+        Tagesordner plus die zuletzt gefundene Datei. Eine fortgesetzte ältere
+        Sitzung fällt so spätestens beim nächsten vollständigen Scan auf.
+        """
+        now = time.time() if now is None else now
+        sessions = self.home / "sessions"
+        if now - self._full_scan_at >= FULL_SCAN_SECONDS:
+            self._full_scan_at = now
+            candidates = list(sessions.glob("*/*/*/rollout-*.jsonl"))
+        else:
+            days = sorted(sessions.glob("*/*/*"))[-2:]
+            candidates = [f for day in days for f in day.glob("rollout-*.jsonl")]
+            if self._newest:
+                candidates.append(self._newest[1])
+        self._newest = _newest(candidates)
         return self._newest[0] if self._newest else None
 
     def live_limits(self):

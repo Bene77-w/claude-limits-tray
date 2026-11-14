@@ -18,7 +18,10 @@ Codex-Profile (ChatGPT-Abos). Linksklick öffnet ein Fenster mit allen Abos.
 - Aktualisierung: alle 60 s bei offenem Fenster, sonst alle 5 min je Abo; Codex
   zusätzlich live aus den Sitzungsprotokollen (spätestens 10 s nach jeder Antwort)
 - Ressourcen: Bei geschlossenem Fenster wacht die App nur alle 10 s auf
-  (Aktivitätsprüfung), bei offenem Fenster sekündlich für die Countdowns. Das Symbol
+  (Aktivitätsprüfung), bei offenem Fenster sekündlich für die Countdowns. Vom
+  Codex-Sitzungsarchiv werden dabei nur die zwei neuesten Tagesordner und die zuletzt
+  aktive Sitzung geprüft, alles nur alle 5 min – eine fortgesetzte ältere Codex-Sitzung
+  gilt darum erst bis zu 5 min später als aktiv. Das Symbol
   wird nur neu gezeichnet, wenn sich Wert, Farbe oder Abo ändern
 - Linksklick = öffnen, Mittelklick = sofort aktualisieren, Rechtsklick = Menü
 

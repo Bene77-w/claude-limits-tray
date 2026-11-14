@@ -303,6 +303,33 @@ class CodexAccountTest(TempDirTest):
         self.assertEqual(limits[0].percent, 25.0)
         self.assertIsNone(self.account.live_limits())  # unverändert -> nichts Neues
 
+    def test_quick_scan_between_full_scans(self):
+        """Zwischen vollständigen Scans: neueste zwei Tagesordner + zuletzt gefundene Datei."""
+        sessions = self.home / "sessions"
+        t0 = time.time() - 7200
+
+        def rollout(day, name, mtime):
+            path = sessions / day / f"rollout-{name}.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{}\n")
+            os.utime(path, (mtime, mtime))
+            return path
+
+        resumed = rollout("2026/09/01", "resumed", t0)
+        older = rollout("2026/08/01", "older", t0 - 60)
+        rollout("2026/10/22", "yesterday", t0 - 120)
+        now = time.time()
+        self.assertEqual(self.account.scan_activity(now), t0)  # vollständig: findet die alte Sitzung
+
+        os.utime(resumed, (t0 + 600, t0 + 600))  # zuletzt gefundene Datei läuft weiter
+        self.assertEqual(self.account.scan_activity(now + 10), t0 + 600)
+        today = rollout("2026/10/23", "today", t0 + 900)  # neue Sitzung im neuesten Tagesordner
+        self.assertEqual(self.account.scan_activity(now + 20), today.stat().st_mtime)
+
+        os.utime(older, (t0 + 1200, t0 + 1200))  # alte Sitzung fortgesetzt
+        self.assertEqual(self.account.scan_activity(now + 30), t0 + 900)  # schneller Scan sieht sie nicht
+        self.assertEqual(self.account.scan_activity(now + p.FULL_SCAN_SECONDS), t0 + 1200)
+
 
 # ------------------------------------------------------------ Konten/Auswahl
 
