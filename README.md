@@ -17,25 +17,34 @@ Codex-Profile (ChatGPT-Abos). Linksklick öffnet ein Fenster mit allen Abos.
   Prozentwert, Reset-Countdown und Reset-Uhrzeit
 - Aktualisierung: alle 60 s bei offenem Fenster, sonst alle 5 min je Abo; Codex
   zusätzlich live aus den Sitzungsprotokollen (spätestens 10 s nach jeder Antwort)
+- Ressourcen: Bei geschlossenem Fenster wacht die App nur alle 10 s auf
+  (Aktivitätsprüfung), bei offenem Fenster sekündlich für die Countdowns. Das Symbol
+  wird nur neu gezeichnet, wenn sich Wert, Farbe oder Abo ändern
 - Linksklick = öffnen, Mittelklick = sofort aktualisieren, Rechtsklick = Menü
 
 ## Installation
 
 ```bash
-./install.sh     # prüft Abhängigkeiten, legt Symlink und Autostart an
-./uninstall.sh   # entfernt Symlink, Autostart und Cache
+./install.sh     # prüft Abhängigkeiten, legt ~/.local/bin/usage-tray an
+./uninstall.sh   # beendet das Tray, entfernt Befehl und Cache
 ```
 
-## Start
+Es gibt keinen Autostart; das Tray läuft nur, wenn es gestartet wurde.
+
+## Start und Stopp
 
 ```bash
-setsid -f ~/.local/bin/claude-limits-tray >/dev/null 2>&1   # ohne Neuanmeldung
-~/.local/bin/claude-limits-tray --demo   # Beispielwerte, ohne Netzwerk
-~/.local/bin/claude-limits-tray --print  # Werte auf der Konsole ausgeben
+usage-tray start    # startet im Hintergrund (Ausgaben: ~/.cache/claude-limits-tray/tray.log)
+usage-tray stop     # beendet die laufende Instanz
+usage-tray status   # läuft es? (Exit-Code 1, wenn nicht)
+./claude_limits_tray.py --demo   # Beispielwerte, ohne Netzwerk
+./claude_limits_tray.py --print  # Werte einmal auf der Konsole ausgeben
 ```
 
-Eine zweite Instanz öffnet nur das Fenster der laufenden Instanz. Startet das
-Cinnamon-Panel neu, meldet sich das Symbol automatisch wieder an.
+Die Instanz wird über ihren D-Bus-Namen `org.bene.ClaudeLimitsTray` gefunden.
+Ein zweiter direkter Aufruf des Skripts öffnet nur das Fenster der laufenden
+Instanz. Startet das Cinnamon-Panel neu, meldet sich das Symbol automatisch
+wieder an.
 
 ## Datenquellen
 

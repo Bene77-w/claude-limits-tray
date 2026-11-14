@@ -34,7 +34,9 @@ Reset-Countdown und Reset-Uhrzeit. Kein Browser, kein Kontextwechsel.
 - Cache je Abo in `~/.cache/claude-limits-tray/usage.json` — Werte sind nach Neustart sofort da
 - Fehlerbehandlung: 401/403 (Token abgelaufen/ungültig), 429 (Backoff), Netzwerk- und Serverfehler
 - Einzelinstanz: ein zweiter Start öffnet nur das bestehende Fenster
-- Autostart beim Login, `--demo` und `--print` als Test-/Diagnosewege
+- Start/Stopp per `usage-tray start|stop|status` (kein Autostart), `--demo` und `--print`
+  als Test-/Diagnosewege
+- Timer bei geschlossenem Fenster nur alle 10 s, Symbol-Pixmaps zwischengespeichert
 
 **Nicht enthalten**
 
@@ -48,15 +50,15 @@ Reset-Countdown und Reset-Uhrzeit. Kein Browser, kein Kontextwechsel.
 
 | Datei | Zeilen | Zweck |
 |---|---:|---|
-| `~/claude-limits-tray/claude_limits_tray.py` | 907 | Tray-Item, Menü, Fenster |
+| `~/claude-limits-tray/claude_limits_tray.py` | 927 | Tray-Item, Menü, Fenster |
 | `~/claude-limits-tray/providers.py` | 704 | Claude/Codex-Abruf, Aktivitätserkennung, Auswahl, Cache |
 | `~/claude-limits-tray/tests/` | 511 | Unit-Tests (Abruf, Token-Auswahl, Backoff, Auswahl, Icon) |
 | `~/claude-limits-tray/README.md` | — | Installation, Bedienung, Datenquelle, Fehlerfälle |
-| `~/claude-limits-tray/install.sh` / `uninstall.sh` | — | Symlink und Autostart einrichten bzw. entfernen |
-| `~/claude-limits-tray/claude-limits-tray.desktop` | — | Autostart-Vorlage (wird von `install.sh` befüllt) |
-| `~/.local/bin/claude-limits-tray` | — | Symlink auf das Skript (installiert) |
-| `~/.config/autostart/claude-limits-tray.desktop` | — | Autostart-Eintrag (installiert) |
+| `~/claude-limits-tray/usage-tray` | — | Befehl `start`/`stop`/`status` (findet die Instanz über D-Bus) |
+| `~/claude-limits-tray/install.sh` / `uninstall.sh` | — | Befehl `usage-tray` einrichten bzw. entfernen |
+| `~/.local/bin/usage-tray` | — | Symlink auf `usage-tray` (installiert) |
 | `~/.cache/claude-limits-tray/usage.json` | — | Laufzeit-Cache der letzten Werte |
+| `~/.cache/claude-limits-tray/tray.log` | — | Ausgaben des letzten `usage-tray start` |
 
 ## Technik
 
@@ -88,8 +90,12 @@ behoben. 42 Unit-Tests; live geprüft mit echten Daten
 (Claude Pro, Codex A Free, Codex B Plus) und End-to-End mit simuliertem
 Codex-Profil auf eigenem D-Bus.
 
+14.11.2026: Befehl `usage-tray start|stop|status` statt Autostart; Timer bei
+geschlossenem Fenster 10 s statt 1 s; Symbol-Pixmaps gecacht (Branch
+`usage-tray-cli`, Review-Anker `b020e9a`).
+
 ## Nächste Schritte (optional)
 
 1. Optionale Desktop-Benachrichtigung ab 80 % / 100 %
 2. Kleine Verlaufsgrafik der letzten 24 h aus dem Cache
-3. Paketierung als `.deb` oder systemd-User-Unit statt Autostart-Datei
+3. Paketierung als `.deb`

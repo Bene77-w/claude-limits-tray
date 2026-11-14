@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timezone
+from functools import lru_cache
 
 import dbus
 import dbus.mainloop.glib
@@ -157,10 +158,12 @@ def render_icon(
     return img
 
 
+@lru_cache(maxsize=8)
 def icon_pixmaps(
     percent: float | None, stale: bool = False, letter: str = "", level_percent: float | None = None
 ):
-    """ARGB32-Pixmaps im SNI-Format (a(iiay))."""
+    """ARGB32-Pixmaps im SNI-Format (a(iiay)); zwischengespeichert, weil das
+    Panel die Properties oft abfragt, sich das Symbol aber selten ändert."""
     out = []
     for size in (22, 32, 48, 64):
         r, g, b, a = render_icon(percent, size, stale, letter, level_percent).split()
@@ -452,7 +455,8 @@ class LimitsApp:
 
         self._scan_activity()
         self._update_view()
-        GLib.timeout_add_seconds(1, self._periodic)
+        self._timer_seconds = 0
+        self._schedule()
         for account in accounts:
             self.refresh(account)
 
@@ -720,6 +724,9 @@ class LimitsApp:
         self._fit()
         self._present()
         self._tick()
+        old_timer = self._timer_id
+        if self._schedule():
+            GLib.source_remove(old_timer)  # sofort sekündlich, nicht erst nach bis zu 10 s
 
     def _present(self):
         # Aufruf kommt per D-Bus, nicht als GTK-Ereignis: ohne aktuellen
@@ -799,9 +806,22 @@ class LimitsApp:
             if account.manual_refresh_allowed(now):
                 self.refresh(account)
 
+    def _schedule(self) -> bool:
+        """Takt anpassen: sekündlich nur bei offenem Fenster (Countdowns),
+        sonst im Abstand der Aktivitätsprüfung. True = neuer Timer läuft,
+        der Aufrufer muss den alten beenden."""
+        seconds = 1 if self.win.get_visible() else ACTIVITY_SCAN_SECONDS
+        if seconds == self._timer_seconds:
+            return False
+        self._timer_seconds = seconds
+        self._timer_id = GLib.timeout_add_seconds(seconds, self._periodic)
+        return True
+
     def _periodic(self):
         now = time.time()
-        if now - self._last_scan >= ACTIVITY_SCAN_SECONDS:
+        # Im 10-s-Takt ist jeder Aufruf eine Prüfung; timeout_add_seconds darf
+        # leicht früh auslösen, darum nicht nur nach Zeitabstand entscheiden.
+        if self._timer_seconds == ACTIVITY_SCAN_SECONDS or now - self._last_scan >= ACTIVITY_SCAN_SECONDS:
             self._scan_activity()
         else:
             self._reselect()
@@ -812,7 +832,7 @@ class LimitsApp:
             if not account.refreshing and account.refresh_due(now, interval):
                 self.refresh(account)
         self._tick()
-        return True
+        return not self._schedule()  # False beendet diesen Timer
 
     def quit(self):
         Gtk.main_quit()

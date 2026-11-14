@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Startet und beendet das Abo-Limits-Tray: usage-tray start|stop|status
+set -euo pipefail
+
+DIR="$(dirname "$(readlink -f "$0")")"
+NAME=org.bene.ClaudeLimitsTray  # D-Bus-Name der laufenden Instanz (CONTROL_NAME)
+LOG="$HOME/.cache/claude-limits-tray/tray.log"
+
+# PID der Instanz, die den D-Bus-Namen hält; trifft nie andere Prozesse
+tray_pid() {
+  gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+    --method org.freedesktop.DBus.GetConnectionUnixProcessID "$NAME" 2>/dev/null \
+    | sed -E 's/.*uint32 ([0-9]+).*/\1/'
+}
+
+case "${1:-}" in
+  start)
+    if pid=$(tray_pid); then echo "Läuft bereits (PID $pid)."; exit 0; fi
+    mkdir -p "$(dirname "$LOG")"
+    setsid -f "$DIR/claude_limits_tray.py" >"$LOG" 2>&1 </dev/null
+    for _ in $(seq 20); do
+      sleep 0.25
+      if pid=$(tray_pid); then echo "Gestartet (PID $pid)."; exit 0; fi
+    done
+    echo "Start fehlgeschlagen, siehe $LOG" >&2
+    exit 1
+    ;;
+  stop)
+    if pid=$(tray_pid); then kill "$pid"; echo "Beendet (PID $pid)."; else echo "Läuft nicht."; fi
+    ;;
+  status)
+    if pid=$(tray_pid); then echo "Läuft (PID $pid)."; else echo "Läuft nicht."; exit 1; fi
+    ;;
+  *)
+    echo "Aufruf: usage-tray start|stop|status" >&2
+    exit 2
+    ;;
+esac
