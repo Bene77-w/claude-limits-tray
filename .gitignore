@@ -1,3 +1,4 @@
 __pycache__/
 *.pyc
 .agent-review-regeln.md
+.agent-review/
