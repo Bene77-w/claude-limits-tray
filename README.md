@@ -16,13 +16,15 @@ Codex-Profile (ChatGPT-Abos). Linksklick öffnet ein Fenster mit allen Abos.
 - Fenster: je Abo Plan, Status („im Tray“, „aktiv“, „genutzt vor …“), Balken je Limit,
   Prozentwert, Reset-Countdown und Reset-Uhrzeit
 - Aktualisierung: alle 60 s bei offenem Fenster, sonst alle 5 min je Abo; Codex
-  zusätzlich live aus den Sitzungsprotokollen (spätestens 10 s nach jeder Antwort)
+  zusätzlich live aus den Sitzungsprotokollen (spätestens 10 s nach jeder Antwort;
+  Ausnahme siehe Ressourcen)
 - Ressourcen: Bei geschlossenem Fenster wacht die App nur alle 10 s auf
   (Aktivitätsprüfung), bei offenem Fenster sekündlich für die Countdowns. Vom
-  Codex-Sitzungsarchiv werden dabei nur die zwei neuesten Tagesordner und die zuletzt
-  aktive Sitzung geprüft, alles nur alle 5 min – eine fortgesetzte ältere Codex-Sitzung
-  gilt darum erst bis zu 5 min später als aktiv. Das Symbol
-  wird nur neu gezeichnet, wenn sich Wert, Farbe oder Abo ändern
+  Codex-Sitzungsarchiv prüft sie alle 10 s nur die zwei neuesten Tagesordner und die
+  zuletzt aktive Sitzung, das ganze Archiv alle 5 min. Wird eine ältere Codex-Sitzung
+  fortgesetzt, erkennt die App deren Aktivität und Live-Werte darum erst bis zu 5 min
+  später; bis dahin gilt der Wert aus dem 5-min-Abruf. Das Symbol wird nur neu
+  gezeichnet, wenn sich Wert, Farbe oder Abo ändern
 - Linksklick = öffnen, Mittelklick = sofort aktualisieren, Rechtsklick = Menü
 
 ## Installation
@@ -96,5 +98,6 @@ Aufbau: `providers.py` (Abruf, Aktivität, Auswahl, Cache – ohne GTK) und
 ## Abhängigkeiten
 
 `python3-gi`, `python3-gi-cairo`, `gir1.2-gtk-3.0`, `python3-dbus`,
-`python3-pil`, für `usage-tray` zusätzlich `gdbus` aus `libglib2.0-bin` (Systempakete). Das Tray-Symbol wird direkt als
-StatusNotifierItem über D-Bus bereitgestellt (kein AppIndicator-Paket nötig).
+`python3-pil`, für `usage-tray` zusätzlich `gdbus` aus `libglib2.0-bin`
+(Systempakete). Das Tray-Symbol wird direkt als StatusNotifierItem über D-Bus
+bereitgestellt (kein AppIndicator-Paket nötig).

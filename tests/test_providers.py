@@ -10,7 +10,7 @@ import tempfile
 import time
 import unittest
 import urllib.error
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -326,9 +326,16 @@ class CodexAccountTest(TempDirTest):
         today = rollout("2026/10/23", "today", t0 + 900)  # neue Sitzung im neuesten Tagesordner
         self.assertEqual(self.account.scan_activity(now + 20), today.stat().st_mtime)
 
-        os.utime(older, (t0 + 1200, t0 + 1200))  # alte Sitzung fortgesetzt
-        self.assertEqual(self.account.scan_activity(now + 30), t0 + 900)  # schneller Scan sieht sie nicht
+        self.account.live_limits()  # Stand der neuesten Sitzung gelesen
+
+        # Alte Sitzung fortgesetzt: Aktivität und Live-Werte erst beim vollständigen Scan
+        # (bewusst in Kauf genommen, siehe entscheidungen.md)
+        older.write_text(_rollout_line(datetime.fromtimestamp(t0 + 1200, timezone.utc).isoformat(), 50.0) + "\n")
+        os.utime(older, (t0 + 1200, t0 + 1200))
+        self.assertEqual(self.account.scan_activity(now + 30), t0 + 900)
+        self.assertIsNone(self.account.live_limits())
         self.assertEqual(self.account.scan_activity(now + p.FULL_SCAN_SECONDS), t0 + 1200)
+        self.assertEqual(self.account.live_limits()[1][0].percent, 50.0)
 
 
 # ------------------------------------------------------------ Konten/Auswahl

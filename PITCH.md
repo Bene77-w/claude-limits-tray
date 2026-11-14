@@ -52,7 +52,7 @@ Reset-Countdown und Reset-Uhrzeit. Kein Browser, kein Kontextwechsel.
 |---|---:|---|
 | `~/claude-limits-tray/claude_limits_tray.py` | 927 | Tray-Item, Menü, Fenster |
 | `~/claude-limits-tray/providers.py` | 722 | Claude/Codex-Abruf, Aktivitätserkennung, Auswahl, Cache |
-| `~/claude-limits-tray/tests/` | 560 | Unit-Tests (Abruf, Token-Auswahl, Backoff, Auswahl, Icon, Timer-Takt) |
+| `~/claude-limits-tray/tests/` | 567 | Unit-Tests (Abruf, Token-Auswahl, Backoff, Auswahl, Icon, Timer-Takt) |
 | `~/claude-limits-tray/README.md` | — | Installation, Bedienung, Datenquelle, Fehlerfälle |
 | `~/claude-limits-tray/usage-tray` | — | Befehl `start`/`stop`/`status` (findet die Instanz über D-Bus) |
 | `~/claude-limits-tray/install.sh` / `uninstall.sh` | — | Befehl `usage-tray` einrichten bzw. entfernen |
@@ -93,8 +93,9 @@ Codex-Profil auf eigenem D-Bus.
 14.11.2026: Befehl `usage-tray start|stop|status` statt Autostart; Timer bei
 geschlossenem Fenster 10 s statt 1 s; Symbol-Pixmaps gecacht; Codex-Archiv nur
 alle 5 min vollständig gescannt (Branch `usage-tray-cli`, Review-Anker `b020e9a`).
-Gemessen über 120 s bei geschlossenem Fenster: Kontextwechsel 126 → 23, RAM
-unverändert ~61 MB; Scan 8,3 → 2,8 ms; 44 Unit-Tests.
+Gemessen über 120 s bei geschlossenem Fenster (b020e9a → 6e608a0): Kontextwechsel
+126 → 33, CPU-Ticks 16 → 10, RAM unverändert ~61 MB; Scan 8,3 → 2,8 ms. Final
+Review abgenommen (`docs/reviews/usage-tray-cli/`); 44 Unit-Tests.
 
 ## Nächste Schritte (optional)
 
