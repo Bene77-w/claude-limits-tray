@@ -1,5 +1,7 @@
 # Auftrag usage-tray-cli (Planquelle)
 
+Branch `usage-tray-cli`, Review-Anker `b020e9a` (Stand `main` vor der Änderung).
+
 Vom User in der Sitzung am 14.11.2026 vorgegeben:
 
 - Ziel des Trays: Abo-Usages schnell sehen.

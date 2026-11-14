@@ -59,5 +59,27 @@ class PresentationTest(unittest.TestCase):
         self.assertEqual(dict(clt.menu_item_props(1, ["label"])), {"label": "Fenster öffnen"})
 
 
+class TimerTest(unittest.TestCase):
+    """Takt: sekündlich nur bei offenem Fenster, sonst alle ACTIVITY_SCAN_SECONDS."""
+
+    def test_schedule_switches_interval(self):
+        from types import SimpleNamespace
+        from unittest import mock
+
+        visible = [False]
+        app = SimpleNamespace(
+            win=SimpleNamespace(get_visible=lambda: visible[0]), _timer_seconds=0, _periodic=lambda: True
+        )
+        with mock.patch.object(clt.GLib, "timeout_add_seconds", side_effect=[11, 12, 13]) as add:
+            self.assertTrue(clt.LimitsApp._schedule(app))  # Start: 10-s-Takt
+            self.assertFalse(clt.LimitsApp._schedule(app))  # unverändert: kein zweiter Timer
+            visible[0] = True
+            self.assertTrue(clt.LimitsApp._schedule(app))  # Fenster offen: 1 s
+            visible[0] = False
+            self.assertTrue(clt.LimitsApp._schedule(app))  # wieder zu: 10 s
+        self.assertEqual([c.args[0] for c in add.call_args_list], [clt.ACTIVITY_SCAN_SECONDS, 1, clt.ACTIVITY_SCAN_SECONDS])
+        self.assertEqual(app._timer_id, 13)
+
+
 if __name__ == "__main__":
     unittest.main()

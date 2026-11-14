@@ -93,5 +93,5 @@ Aufbau: `providers.py` (Abruf, Aktivität, Auswahl, Cache – ohne GTK) und
 ## Abhängigkeiten
 
 `python3-gi`, `python3-gi-cairo`, `gir1.2-gtk-3.0`, `python3-dbus`,
-`python3-pil` (Systempakete). Das Tray-Symbol wird direkt als
+`python3-pil`, für `usage-tray` zusätzlich `gdbus` aus `libglib2.0-bin` (Systempakete). Das Tray-Symbol wird direkt als
 StatusNotifierItem über D-Bus bereitgestellt (kein AppIndicator-Paket nötig).
