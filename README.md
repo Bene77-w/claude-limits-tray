@@ -123,3 +123,7 @@ python3 -m unittest discover -s tests
 Das Tray-Symbol wird direkt über D-Bus bereitgestellt, ein AppIndicator-Paket ist
 nicht nötig. Startet das Panel neu, meldet sich das Symbol automatisch wieder an.
 Eine zweite Instanz öffnet nur das Fenster der laufenden.
+
+## Lizenz
+
+[MIT](LICENSE)
