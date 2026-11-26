@@ -1,90 +1,112 @@
-# Claude Limits Tray („Abo-Limits“)
+# Claude Limits Tray
 
-Tray-Symbol für Cinnamon/X11 mit den Nutzungslimits des Claude-Abos und aller
-Codex-Profile (ChatGPT-Abos). Linksklick öffnet ein Fenster mit allen Abos.
+Ein Tray-Symbol für Linux-Desktops (Cinnamon/X11), das die Nutzungslimits deines
+**Claude-Abos** und deiner **ChatGPT/Codex-Abos** auf einen Blick zeigt: wie viel vom
+5-Stunden- und Wochenlimit verbraucht ist und wann es zurückgesetzt wird.
 
-- Symbol: zeigt das Abo, das **gerade benutzt** wird (Buchstabe im Ring:
-  `A` = Anthropic/Claude, `C` = Codex; welches Codex-Profil, steht im Tooltip).
-  Ring = 5-Stunden-Limit, falls das Abo eins hat, sonst das nächstlängere
-  (Woche, bei Codex Free 30 Tage); blass = Werte veraltet, gepunktet = noch keine Daten
-- Farben: grün, ab 70 % orange, ab 90 % rot. Im Tray zählt das höchste Limit des
-  angezeigten Abos (ein Wochenlimit bei 92 % färbt den Ring also rot), im Fenster
-  jeder Balken für sich
-- Auswahl: „in Benutzung“ = Aktivität in den letzten 10 min. Mehrere gleichzeitig →
-  das mit dem höchsten Wert im Ring-Limit. Keins aktiv → das zuletzt genutzte
-- Tooltip: alle Abos mit Limits und Reset-Countdown, das angezeigte mit ▸ markiert
-- Fenster: je Abo Plan, Status („im Tray“, „aktiv“, „genutzt vor …“), Balken je Limit,
-  Prozentwert, Reset-Countdown und Reset-Uhrzeit
-- Aktualisierung: alle 60 s bei offenem Fenster, sonst alle 5 min je Abo; Codex
-  zusätzlich live aus den Sitzungsprotokollen (spätestens 10 s nach jeder Antwort;
-  Ausnahme siehe Ressourcen)
-- Ressourcen: Bei geschlossenem Fenster wacht die App nur alle 10 s auf
-  (Aktivitätsprüfung), bei offenem Fenster sekündlich für die Countdowns. Vom
-  Codex-Sitzungsarchiv prüft sie alle 10 s nur die zwei neuesten Tagesordner und die
-  zuletzt aktive Sitzung, das ganze Archiv alle 5 min. Wird eine ältere Codex-Sitzung
-  fortgesetzt, erkennt die App deren Aktivität und Live-Werte darum erst bis zu 5 min
-  später; bis dahin gilt der Wert aus dem 5-min-Abruf. Das Symbol wird nur neu
-  gezeichnet, wenn sich Wert, Farbe oder Abo ändern
-- Linksklick = öffnen, Mittelklick = sofort aktualisieren, Rechtsklick = Menü
+Du musst nicht mehr `/status` aufrufen oder eine Webseite öffnen. Das Symbol zeigt
+immer das Abo, mit dem du gerade arbeitest.
+
+> **Inoffiziell.** Dieses Projekt gehört nicht zu Anthropic oder OpenAI. Es fragt
+> dieselben internen Nutzungs-Endpunkte ab wie Claude Code und Codex selbst. Diese
+> Endpunkte sind nicht dokumentiert und können sich jederzeit ändern.
+
+## Funktionen
+
+- **Ring-Symbol im Tray:** Der Buchstabe zeigt das Abo (`A` = Anthropic/Claude,
+  `C` = Codex), der Ring den Verbrauch des 5-Stunden-Limits (sonst des nächstlängeren
+  Limits).
+- **Ampelfarben:** grün, ab 70 % orange, ab 90 % rot. Die Farbe richtet sich nach dem
+  höchsten Limit des Abos, ein Wochenlimit bei 92 % färbt den Ring also rot.
+- **Automatische Abo-Wahl:** Angezeigt wird das Abo, das in den letzten 10 Minuten
+  benutzt wurde, sonst das zuletzt genutzte.
+- **Tooltip:** alle Abos mit Limits und Countdown bis zum Reset.
+- **Fenster (Linksklick):** je Abo Plan, Status, ein Balken je Limit, Prozentwert und
+  Reset-Zeitpunkt.
+- **Mehrere Codex-Profile:** `~/.codex`, `~/.codex-b`, `~/.codex-c` usw. werden
+  automatisch erkannt.
+- **Sparsam:** Bei geschlossenem Fenster wacht die App nur alle 10 s auf und fragt die
+  Server höchstens alle 5 Minuten je Abo ab. Bei HTTP 429 wartet sie mit wachsendem
+  Abstand.
+- **Offline-fest:** Die letzten Werte bleiben sichtbar (blass) und sind nach einem
+  Neustart sofort wieder da.
+
+Bedienung: Linksklick öffnet das Fenster, Mittelklick aktualisiert sofort, Rechtsklick
+öffnet das Menü.
+
+## Voraussetzungen
+
+- Linux mit einem Panel, das StatusNotifierItems anzeigt (getestet mit Cinnamon/X11)
+- Python 3.10 oder neuer
+- Systempakete (Debian/Ubuntu/Mint):
+
+  ```bash
+  sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 python3-dbus python3-pil libglib2.0-bin
+  ```
+
+- Mindestens einer dieser Logins:
+  - [Claude Code](https://docs.claude.com/en/docs/claude-code), angemeldet mit einem Claude-Abo (`/login`)
+  - [Codex CLI](https://github.com/openai/codex), angemeldet mit einem ChatGPT-Konto
+    (ein reiner API-Key reicht nicht)
 
 ## Installation
 
 ```bash
-./install.sh     # prüft Abhängigkeiten, legt ~/.local/bin/usage-tray an
-./uninstall.sh   # beendet das Tray, entfernt Befehl und Cache
+git clone https://github.com/Bene77-w/claude-limits-tray.git
+cd claude-limits-tray
+./install.sh
 ```
 
-Es gibt keinen Autostart; das Tray läuft nur, wenn es gestartet wurde.
+`install.sh` prüft die Abhängigkeiten und legt den Befehl `~/.local/bin/usage-tray`
+als Symlink an. Den Projektordner danach nicht verschieben. Ein Autostart wird nicht
+eingerichtet.
 
-## Start und Stopp
+## Benutzung
 
 ```bash
-usage-tray start    # startet im Hintergrund (Ausgaben: ~/.cache/claude-limits-tray/tray.log)
-usage-tray stop     # beendet die laufende Instanz
-usage-tray status   # läuft es? (Exit-Code 1, wenn nicht)
-./claude_limits_tray.py --demo   # Beispielwerte, ohne Netzwerk
-./claude_limits_tray.py --print  # Werte einmal auf der Konsole ausgeben
+usage-tray start     # im Hintergrund starten (Log: ~/.cache/claude-limits-tray/tray.log)
+usage-tray stop      # laufende Instanz beenden
+usage-tray status    # läuft es? (Exit-Code 1, wenn nicht)
+
+./claude_limits_tray.py --print   # Werte einmal im Terminal ausgeben
+./claude_limits_tray.py --demo    # Oberfläche mit Beispielwerten, ohne Netzwerk
 ```
 
-Die Instanz wird über ihren D-Bus-Namen `org.bene.ClaudeLimitsTray` gefunden.
-Ein zweiter direkter Aufruf des Skripts öffnet nur das Fenster der laufenden
-Instanz. Startet das Cinnamon-Panel neu, meldet sich das Symbol automatisch
-wieder an.
+Für einen Autostart trägst du `usage-tray start` in den Startprogrammen deiner
+Desktop-Umgebung ein.
 
-## Datenquellen
+Deinstallation: `./uninstall.sh` beendet das Tray und entfernt den Befehl und den
+Cache. Der Projektordner bleibt erhalten.
 
-**Claude:** `GET https://api.anthropic.com/api/oauth/usage` mit dem Access-Token
-des Claude-Code-Logins (`claudeAiOauth` in `~/.claude/.credentials.json`,
-alternativ `CLAUDE_CODE_OAUTH_TOKEN`). Andere Tokens in der Datei (z. B. von
-MCP-Servern) werden nie verwendet. Aktivität: zuletzt geschriebene Sitzungen unter
-`~/.claude/projects/`, aber nur mit Claude-Modell – `claude-dsh`-Sitzungen mit
-DeepSeek zählen nicht.
+## Datenschutz und Sicherheit
 
-**Codex:** jedes Profil `~/.codex` (= A) und `~/.codex-<buchstabe>` (z. B. `~/.codex-b` = B)
-mit `auth.json`; andere Ordner wie `~/.codex-old` werden ignoriert.
-`GET https://chatgpt.com/backend-api/wham/usage` (wie `/status` in Codex) mit
-`access_token` und `account_id` des Profils; der Token geht nur an chatgpt.com.
-Aktivität und Live-Werte: neueste `sessions/**/rollout-*.jsonl` des Profils
-(`token_count`-Einträge mit `rate_limits`). Abgelaufene Tokens erneuert die App
-nicht selbst – Codex im Profil einmal starten (`codex-a`/`codex-b`).
+Die App liest nur die Anmeldedateien, die Claude Code und Codex ohnehin anlegen:
 
-Tokens werden nur im Speicher gehalten und nie geloggt oder angezeigt. Weiterleitungen
-werden nicht verfolgt, damit kein Token an einen anderen Host geht.
-`utilization`/`used_percent` sind Prozentwerte.
+| Quelle | Gelesen wird | Gesendet an |
+|---|---|---|
+| `~/.claude/.credentials.json` (oder `CLAUDE_CODE_OAUTH_TOKEN`) | nur der Claude-Code-Login (`claudeAiOauth`), keine anderen Tokens wie die von MCP-Servern | `api.anthropic.com/api/oauth/usage` |
+| `~/.codex*/auth.json` | `access_token` und `account_id` | `chatgpt.com/backend-api/wham/usage` |
+| `~/.claude/projects/`, `~/.codex*/sessions/` | nur Zeitstempel, Modellname und Limit-Einträge, um die Aktivität zu erkennen | nirgendwohin |
 
-## Fehlerfälle
+- Tokens werden nur im Speicher gehalten. Sie werden nie geloggt, angezeigt oder
+  gespeichert.
+- Die App folgt keinen HTTP-Weiterleitungen, damit kein Token an einen anderen Host
+  gelangt.
+- Abgelaufene Tokens erneuert sie nicht selbst. Das übernehmen Claude Code bzw. Codex
+  beim nächsten Start, danach aktualisiert sich die Anzeige automatisch.
+- Im Cache (`~/.cache/claude-limits-tray/usage.json`) liegen nur Prozentwerte,
+  Reset-Zeiten und der Name des Plans.
+- Es gibt keine Telemetrie und keine Verbindungen zu anderen Servern.
 
-| Fall | Verhalten |
+## Fehlerbehebung
+
+| Anzeige | Ursache und Lösung |
 |---|---|
-| Token abgelaufen (laut Ablaufzeit oder HTTP 401) | Hinweis im Fenster; sobald Claude Code bzw. Codex die Anmeldedatei erneuert, wird sofort neu abgefragt, sonst nach 5 min |
-| HTTP 403 | Hinweis auf fehlende Berechtigung bzw. neue Anmeldung |
-| HTTP 429 | Pause mit Verdopplung bei Wiederholung (3 → 6 → 12 → 24 → max. 30 min); `Retry-After` wird beachtet, kommt aber oft als `0`. Der Aktualisieren-Knopf fragt während der Pause nicht an |
-| Netzwerk weg | neuer Versuch nach 1 min |
-| sonstige Serverfehler | neuer Versuch nach 3 min |
-
-Bei Fehlern bleiben die letzten Werte sichtbar (blass im Fenster und im Symbol).
-Sie liegen je Abo in `~/.cache/claude-limits-tray/usage.json` und werden nach
-einem Neustart sofort angezeigt.
+| „Token abgelaufen“ | Claude Code bzw. Codex einmal starten. Sobald die Anmeldedatei erneuert ist, fragt das Tray sofort neu ab. |
+| HTTP 403 | Der Login hat keine Berechtigung für Nutzungsdaten. Neu anmelden (`/login`). |
+| HTTP 429 | Zu viele Anfragen. Das Tray pausiert automatisch (3 → 6 → 12 → … max. 30 min). |
+| Symbol blass | Die Werte sind veraltet (offline oder Fehler). Details stehen im Fenster. |
+| Kein Symbol sichtbar | Das Panel zeigt keine StatusNotifierItems. Prüfe das mit `usage-tray status` und im Log. |
 
 ## Entwicklung
 
@@ -92,12 +114,12 @@ einem Neustart sofort angezeigt.
 python3 -m unittest discover -s tests
 ```
 
-Aufbau: `providers.py` (Abruf, Aktivität, Auswahl, Cache – ohne GTK) und
-`claude_limits_tray.py` (Tray, Menü, Fenster).
+| Datei | Inhalt |
+|---|---|
+| `providers.py` | Abruf, Aktivitätserkennung, Abo-Wahl, Cache (ohne GTK, gut testbar) |
+| `claude_limits_tray.py` | Tray-Symbol (StatusNotifierItem über D-Bus), Menü, Fenster |
+| `usage-tray` | Start/Stopp; findet die Instanz über ihren D-Bus-Namen |
 
-## Abhängigkeiten
-
-`python3-gi`, `python3-gi-cairo`, `gir1.2-gtk-3.0`, `python3-dbus`,
-`python3-pil`, für `usage-tray` zusätzlich `gdbus` aus `libglib2.0-bin`
-(Systempakete). Das Tray-Symbol wird direkt als StatusNotifierItem über D-Bus
-bereitgestellt (kein AppIndicator-Paket nötig).
+Das Tray-Symbol wird direkt über D-Bus bereitgestellt, ein AppIndicator-Paket ist
+nicht nötig. Startet das Panel neu, meldet sich das Symbol automatisch wieder an.
+Eine zweite Instanz öffnet nur das Fenster der laufenden.
